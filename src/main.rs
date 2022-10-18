@@ -40,7 +40,7 @@ struct Row {
     position: Option<Position>,
     generic_count: usize,
     atb_count: usize,
-    trait_name: Option<String>,
+    trait_name: String,
     crate_name: String,
 }
 
@@ -106,9 +106,14 @@ impl Visit<'_> for PositionalStats<'_> {
             };
 
             let trait_name = match trait_bound.path.segments.last() {
-                Some(seg) => Some(seg.ident.to_string()),
-                None => None,
+                Some(seg) => seg.ident.to_string(),
+                None => continue,
             };
+
+            match trait_name.as_str() {
+                "Sync" | "Send" | "Copy" | "Sized" | "Unpin" => continue,
+                _ => (),
+            }
 
             let mut counter = TraitParamCounter::default();
 
