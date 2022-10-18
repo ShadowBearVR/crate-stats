@@ -64,13 +64,14 @@ pub fn main() -> Result<(), Error> {
         max_age,
     } = Args::parse();
     let max_age: Duration = max_age.into();
-    fs::create_dir_all(&output)?;
 
+    // Download a dump of crates.io if needed
     let db_dump = output.join("crates-db-dump");
     if !db_dump.exists() || update_crates_db {
         unpack_tar_gz("https://static.crates.io/db-dump.tar.gz", &db_dump)?;
     }
 
+    // Find the last downloaded dump
     let db_dumps = db_dump
         .read_dir()?
         .map(|dir| match dir {
@@ -84,20 +85,24 @@ pub fn main() -> Result<(), Error> {
         .max_by(|a, b| a.file_name().cmp(&b.file_name()))
         .ok_or(anyhow!("no crates.io database dump downloaded"))?;
 
+    // Read crates.csv
     let mut crates = csv::Reader::from_path(latest_dump.join("data").join("crates.csv"))?
         .into_deserialize()
         .collect::<Result<Vec<CrateRow>, _>>()?;
 
+    // Filter down the list of crates
     let now = SystemTime::now();
     crates.retain(|row| row.updated_at > now - max_age);
     crates.sort_unstable_by_key(|row| Reverse(row.downloads));
     crates.truncate(total_count);
 
+    // Create initial version lists
     let mut versions = HashMap::<u64, Vec<VersionRow>>::new();
     for row in &crates {
         versions.entry(row.id).or_default();
     }
 
+    // Fill up the version lists
     for version in csv::Reader::from_path(latest_dump.join("data").join("versions.csv"))?
         .into_deserialize::<VersionRow>()
     {
@@ -111,20 +116,25 @@ pub fn main() -> Result<(), Error> {
 
     let source_dir = output.join("source");
 
+    // Download latest versions
     for row in &crates {
         let version = versions
             .get(&row.id)
             .and_then(|versions| versions.iter().max_by_key(|ver| &ver.created_at));
+
         let version = match version {
             Some(v) => v,
             None => continue,
         };
+
         if source_dir
             .join(format!("{0}-{1}", &row.name, &version.num))
             .exists()
         {
+            // Already downloaded
             continue;
         }
+
         let url = format!(
             "https://static.crates.io/crates/{0}/{0}-{1}.crate",
             &row.name, &version.num
