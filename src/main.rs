@@ -1,6 +1,15 @@
-use std::fs;
-
+use anyhow::Error;
+use glob::glob;
+use std::{fs, path::Path};
 use syn::visit::{visit_file, Visit};
+
+#[derive(clap::Parser, Debug)]
+#[command(name = "download_crates", author, version, about, long_about = None)]
+struct Args {
+    /// Directory or file to parse
+    #[arg(default_value = "./download/source")]
+    source: String,
+}
 
 #[derive(Default, Debug)]
 struct Stats {
@@ -13,18 +22,30 @@ impl Visit<'_> for Stats {
     }
 }
 
+impl Stats {
+    pub fn collect(&mut self, path: &impl AsRef<Path>) -> Result<(), Error> {
+        let source = fs::read_to_string(path)?;
+        let file = syn::parse_file(&source)?;
+        visit_file(self, &file);
+        Ok(())
+    }
+}
+
 fn main() {
-    let source = fs::read_to_string("./src/main.rs").unwrap();
-    let file = syn::parse_file(&source).unwrap();
-    // dbg!(file);
-
+    let Args { source } = clap::Parser::parse();
     let mut stats = Stats::default();
-
-    visit_file(&mut stats, &file);
+    if Path::new(&source).is_file() {
+        stats.collect(&source).unwrap();
+    } else {
+        for path in glob(&format!("{source}/**/*.rs")).unwrap() {
+            let path = path.unwrap();
+            if let Err(err) = stats.collect(&path) {
+                eprintln!("Error parsing {}: {:?}", path.display(), err);
+            } else {
+                eprintln!("Parsing {}", path.display());
+            }
+        }
+    }
 
     dbg!(stats);
 }
-
-// fn sum_numbers(nums: impl Iterator<Item = i32>) -> i32 {
-//     nums.sum()
-// }

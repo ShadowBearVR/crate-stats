@@ -15,7 +15,7 @@ struct Args {
     /// Directory to save output files
     #[arg(default_value = "./download")]
     output: PathBuf,
-    #[arg(long)]
+    #[arg(short = 'u', long)]
     update_crates_db: bool,
     #[arg(short = 'n', long, default_value_t = 100)]
     total_count: usize,
