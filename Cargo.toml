@@ -6,5 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-syn = {version="^1.0",features=["full","visit","extra-traits"]}
-
+syn = { version="^1.0", features=["full", "visit", "extra-traits"] }
+flate2 = "1"
+tar = "0.4"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+ureq = "2.5"
+glob = "0.3"
+csv = "1.1"
+serde = { version = "1", features = ["derive"] }
+humantime = "2.1"
+humantime-serde = "1.1"
