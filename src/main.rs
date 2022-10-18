@@ -1,10 +1,9 @@
-use anyhow::Error;
 use glob::glob;
 use std::{fs, path::Path};
 use syn::visit::{visit_file, Visit};
 
 #[derive(clap::Parser, Debug)]
-#[command(name = "download_crates", author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None)]
 struct Args {
     /// Directory or file to parse
     #[arg(default_value = "./download/source")]
@@ -23,8 +22,8 @@ impl Visit<'_> for Stats {
 }
 
 impl Stats {
-    pub fn collect(&mut self, path: &impl AsRef<Path>) -> Result<(), Error> {
-        let source = fs::read_to_string(path)?;
+    pub fn collect(&mut self, path: &impl AsRef<Path>) -> Result<(), syn::Error> {
+        let source = fs::read_to_string(path).unwrap();
         let file = syn::parse_file(&source)?;
         visit_file(self, &file);
         Ok(())
@@ -40,9 +39,14 @@ fn main() {
         for path in glob(&format!("{source}/**/*.rs")).unwrap() {
             let path = path.unwrap();
             if let Err(err) = stats.collect(&path) {
-                eprintln!("Error parsing {}: {:?}", path.display(), err);
+                eprintln!(
+                    "Error parsing {}:{}: {}",
+                    path.display(),
+                    err.span().start().line,
+                    err
+                );
             } else {
-                eprintln!("Parsing {}", path.display());
+                // eprintln!("Parsing {}", path.display());
             }
         }
     }

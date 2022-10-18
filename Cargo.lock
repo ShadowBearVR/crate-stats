@@ -121,6 +121,7 @@ dependencies = [
  "glob",
  "humantime",
  "humantime-serde",
+ "proc-macro2",
  "serde",
  "syn",
  "tar",
