@@ -1,22 +1,26 @@
 use glob::glob;
-use std::{fs, path::Path};
+use std::fs::{self, File};
+use std::path::{Path, PathBuf};
 use syn::visit::{self, Visit};
 
 #[derive(clap::Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Directory or file to parse
-    #[arg(default_value = "./download/source")]
+    #[arg(short, long, default_value = "./download/source")]
     source: String,
-}
-
-#[derive(Default, Debug)]
-struct Stats {
-    rows: Vec<Row>,
-    crate_name: String,
+    /// CSV file to write output
+    #[arg(short, long, default_value = "./output/syntax.csv")]
+    output: PathBuf,
 }
 
 #[derive(Debug)]
+struct Stats {
+    rows: csv::Writer<File>,
+    crate_name: String,
+}
+
+#[derive(Debug, serde::Serialize)]
 enum SyntaxType {
     Def,
     Impl,
@@ -24,20 +28,26 @@ enum SyntaxType {
     Where,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
 enum Position {
     Argument,
     Return,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 struct Row {
     syntax: SyntaxType,
     position: Option<Position>,
     generic_count: usize,
     atb_count: usize,
-    trait_name: String,
+    trait_name: Option<String>,
     crate_name: String,
+}
+
+#[derive(Default, Debug)]
+struct TraitParamCounter {
+    generic_count: usize,
+    atb_count: usize,
 }
 
 struct PositionalStats<'stats> {
@@ -67,16 +77,55 @@ impl Visit<'_> for Stats {
     }
 }
 
+impl Visit<'_> for TraitParamCounter {
+    fn visit_generic_argument(&mut self, node: &syn::GenericArgument) {
+        match node {
+            syn::GenericArgument::Lifetime(_) => {}
+            syn::GenericArgument::Type(_) => self.generic_count += 1,
+            syn::GenericArgument::Const(_) => {}
+            syn::GenericArgument::Binding(_) => self.atb_count += 1,
+            syn::GenericArgument::Constraint(_) => {}
+        }
+    }
+
+    fn visit_parenthesized_generic_arguments(&mut self, node: &syn::ParenthesizedGenericArguments) {
+        self.generic_count += node.inputs.len();
+        match node.output {
+            syn::ReturnType::Default => {}
+            syn::ReturnType::Type(_, _) => self.atb_count += 1,
+        }
+    }
+}
+
 impl Visit<'_> for PositionalStats<'_> {
-    fn visit_type_impl_trait(&mut self, i: &syn::TypeImplTrait) {
-        self.stats.rows.push(Row {
-            syntax: SyntaxType::Impl,
-            position: Some(self.position),
-            generic_count: 0,
-            atb_count: 0,
-            trait_name: "".to_string(),
-            crate_name: self.stats.crate_name.clone(),
-        })
+    fn visit_type_impl_trait(&mut self, node: &syn::TypeImplTrait) {
+        for bound in &node.bounds {
+            let trait_bound = match bound {
+                syn::TypeParamBound::Trait(t) => t,
+                syn::TypeParamBound::Lifetime(_) => continue,
+            };
+
+            let trait_name = match trait_bound.path.segments.last() {
+                Some(seg) => Some(seg.ident.to_string()),
+                None => None,
+            };
+
+            let mut counter = TraitParamCounter::default();
+
+            visit::visit_trait_bound(&mut counter, trait_bound);
+
+            self.stats
+                .rows
+                .serialize(Row {
+                    syntax: SyntaxType::Impl,
+                    position: Some(self.position),
+                    generic_count: counter.generic_count,
+                    atb_count: counter.atb_count,
+                    trait_name,
+                    crate_name: self.stats.crate_name.clone(),
+                })
+                .unwrap();
+        }
     }
 }
 
@@ -90,9 +139,19 @@ impl Stats {
 }
 
 fn main() {
-    let Args { source } = clap::Parser::parse();
+    let Args { source, output } = clap::Parser::parse();
     let source_path = Path::new(&source).canonicalize().unwrap();
-    let mut stats = Stats::default();
+    match output.parent() {
+        Some(dir) => {
+            fs::create_dir_all(dir).unwrap();
+        }
+        None => {}
+    };
+    let output = csv::Writer::from_path(output).unwrap();
+    let mut stats = Stats {
+        rows: output,
+        crate_name: "".to_string(),
+    };
     if Path::new(&source).is_file() {
         stats.collect(&source).unwrap();
     } else {
@@ -117,6 +176,4 @@ fn main() {
             }
         }
     }
-
-    dbg!(stats);
 }
