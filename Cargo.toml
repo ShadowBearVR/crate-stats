@@ -18,6 +18,9 @@ csv = "1.1"
 serde = { version = "1", features = ["derive"] }
 humantime = "2.1"
 humantime-serde = "1.1"
+chrono = "0.4"
+hostname = "^0.3"
+indicatif = "^0.17"
 
 [profile.dev]
 opt-level = 2
