@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Error};
 use clap::Parser;
 use flate2::read::GzDecoder;
+use indicatif::ProgressBar;
 use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fs;
@@ -24,7 +25,7 @@ struct Args {
 }
 
 pub fn unpack_tar_gz(url: &str, into: &Path) -> Result<(), Error> {
-    println!("Downloading {url:?}.");
+    //println!("Downloading {url:?}.");
     fs::create_dir_all(into)?;
     let read = ureq::get(url)
         .set("User-Agent", "syntax-sugar-survey (slsartor@wm.edu)")
@@ -116,6 +117,10 @@ pub fn main() -> Result<(), Error> {
 
     let source_dir = output.join("source");
 
+    let num_crates = crates.len().try_into().unwrap();
+
+    let bar = ProgressBar::new(num_crates);
+
     // Download latest versions
     for row in &crates {
         let version = versions
@@ -140,7 +145,10 @@ pub fn main() -> Result<(), Error> {
             &row.name, &version.num
         );
         unpack_tar_gz(&url, &source_dir)?;
+        bar.inc(1);
     }
+
+    bar.finish();
 
     Ok(())
 }
