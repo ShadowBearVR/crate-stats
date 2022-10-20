@@ -1,8 +1,11 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use glob::glob;
+use rayon::{prelude::*, ThreadBuilder};
 use std::fs::{self};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::SystemTime;
 use syn::visit::{self, Visit};
 
@@ -91,6 +94,12 @@ impl<W: Write> Rows for csv::Writer<W> {
 impl Rows for Vec<Row> {
     fn push(&mut self, row: Row) {
         Vec::push(self, row);
+    }
+}
+
+impl<R: Rows> Rows for Arc<Mutex<R>> {
+    fn push(&mut self, row: Row) {
+        self.lock().unwrap().push(row);
     }
 }
 
@@ -297,6 +306,33 @@ struct Args {
     output: PathBuf,
 }
 
+fn run(mut stats: Stats<impl Rows>, source_path: &Path, source: &str) {
+    if Path::new(&source).is_file() {
+        stats.collect(&source).unwrap();
+    } else {
+        for path in glob(&format!("{source}/**/*.rs")).unwrap() {
+            let path = path.unwrap().canonicalize().unwrap();
+            let crate_name = path
+                .strip_prefix(&source_path)
+                .unwrap()
+                .components()
+                .next()
+                .unwrap();
+            stats.crate_name = crate_name.as_os_str().to_str().unwrap().to_string();
+            if let Err(err) = stats.collect(&path) {
+                eprintln!(
+                    "Error parsing {}:{}: {}",
+                    path.display(),
+                    err.span().start().line,
+                    err
+                );
+            } else {
+                // eprintln!("Parsing {}", path.display());
+            }
+        }
+    }
+}
+
 fn main() {
     let Args { source, output } = clap::Parser::parse();
     let source_path = Path::new(&source).canonicalize().unwrap();
@@ -327,32 +363,17 @@ fn main() {
     output.set_file_name(output_filename);
 
     let output = csv::Writer::from_path(output).unwrap();
-    let mut stats = Stats {
+    let stats = Stats {
         rows: output,
         crate_name: "".to_string(),
     };
-    if Path::new(&source).is_file() {
-        stats.collect(&source).unwrap();
-    } else {
-        for path in glob(&format!("{source}/**/*.rs")).unwrap() {
-            let path = path.unwrap().canonicalize().unwrap();
-            let crate_name = path
-                .strip_prefix(&source_path)
-                .unwrap()
-                .components()
-                .next()
-                .unwrap();
-            stats.crate_name = crate_name.as_os_str().to_str().unwrap().to_string();
-            if let Err(err) = stats.collect(&path) {
-                eprintln!(
-                    "Error parsing {}:{}: {}",
-                    path.display(),
-                    err.span().start().line,
-                    err
-                );
-            } else {
-                // eprintln!("Parsing {}", path.display());
-            }
-        }
-    }
+
+    thread::Builder::new()
+        .stack_size(16 * 1024 * 1026)
+        .spawn(move || {
+            run(stats, &source_path, &source);
+        })
+        .unwrap()
+        .join()
+        .unwrap()
 }

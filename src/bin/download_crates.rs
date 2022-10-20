@@ -183,6 +183,12 @@ struct GitHubRepo {
     pub head: Option<String>,
 }
 
+impl GitHubRepo {
+    fn should_exclude(&self) -> bool {
+        ["rust-lang/rust"].contains(&self.full_name.as_str())
+    }
+}
+
 fn search_github(
     &Args {
         ref github_token,
@@ -262,6 +268,12 @@ fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
     for repo in repos {
         let name = &repo.name;
         let full_name = &repo.full_name;
+        if full_name == "rust-lang/rust" {
+            // The rust repo has too much weird syntax
+            bar.inc(1);
+            continue;
+        }
+
         let sha = match &repo.head {
             Some(s) => s,
             None => {
@@ -273,8 +285,13 @@ fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
         let source_name = format!("{name}-{sha}");
         if source_dir.join(&source_name).exists() {
             // Already downloaded
+            if repo.should_exclude() {
+                fs::remove_dir_all(source_dir.join(&source_name))?;
+            }
         } else {
-            unpack_tar_gz(&url, &source_dir)?;
+            if !repo.should_exclude() {
+                unpack_tar_gz(&url, &source_dir)?;
+            }
         }
         bar.inc(1);
     }
