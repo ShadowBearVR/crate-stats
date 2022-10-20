@@ -213,9 +213,15 @@ impl<R: Rows> Stats<R> {
     }
 
     pub fn collect(&mut self, path: impl AsRef<Path>) -> Result<(), syn::Error> {
-        let source = fs::read_to_string(path).unwrap();
-        let file = syn::parse_file(&source)?;
-        visit::visit_file(self, &file);
+        match fs::read_to_string(path.as_ref()) {
+            Ok(source) => {
+                let file = syn::parse_file(&source)?;
+                visit::visit_file(self, &file);
+            }
+            Err(err) => {
+                eprintln!("Error reading {}: {}", path.as_ref().display(), err);
+            }
+        }
         Ok(())
     }
 }
