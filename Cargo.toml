@@ -21,7 +21,6 @@ humantime-serde = "1.1"
 chrono = "0.4"
 hostname = "^0.3"
 indicatif = "^0.17"
-rayon = "^1.5"
 
 [profile.dev]
 opt-level = 2

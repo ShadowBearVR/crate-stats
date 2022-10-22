@@ -35,14 +35,23 @@ using CategoricalArrays
 # ╔═╡ b1fdf946-3f3d-4c80-8a75-b1b805293e77
 import CSV
 
+# ╔═╡ 2de0278f-bc77-43c8-9c29-3d7db1dddc0b
+import Random
+
 # ╔═╡ 721da63c-33cf-4e3b-ad09-d69f5663976f
-@bind path Select(glob("output/*.csv"))
+@bind path Select(sort(glob("output/*.csv"), order=Base.Reverse))
 
 # ╔═╡ bdf2c442-9bf7-49e6-9b82-2f3b019ad989
-data = DataFrame(CSV.File(path, stringtype=String))
+data_all = DataFrame(CSV.File(path, stringtype=String))
 
 # ╔═╡ 7026dbaf-9b0d-4c9a-9a1f-1409dc9f9e08
 search_data = DataFrame(CSV.File("./download/github-search-dump.csv", stringtype=String))
+
+# ╔═╡ cb11f347-4153-4964-b8cb-e7ffef3d8f9b
+crate_desc = "Repository"
+
+# ╔═╡ 475e0db3-67a7-4571-862d-92d8a004604b
+crates_desc = "Repositories"
 
 # ╔═╡ 07414be9-58e7-4592-b6fa-47145383490d
 github_names = search_data.name .* '-' .* search_data.head
@@ -57,62 +66,119 @@ repo_issue_counts = Dict(github_names .=> search_data.open_issues_count)
 repo_sizes = Dict(github_names .=> search_data.size)
 
 # ╔═╡ 1cbb0bdf-ff94-4f11-b027-89821bf35bf2
-syntaxes = levels(data.syntax)
+syntaxes = levels(data_all.syntax)
 
 # ╔═╡ 93f4e165-cddc-4d0d-84a6-766f1fe6d1a9
-crates = levels(data.crate_name)
-
-# ╔═╡ 4a26996c-5d56-49de-8ae1-60471fb05d98
-trait_filter(name) = !(name in ["Clone", "Copy", "Debug", "PartialEq", "Eq", "Display"])
+crates = levels(data_all.crate_name)
 
 # ╔═╡ 5fb97fb0-a906-4550-8f80-71f406e010fe
-data_ats = subset(data, :at_count => c -> c .> 0)
+data_ats = subset(data_all, :at_count => c -> c .> 0)
+
+# ╔═╡ a19e800b-9fe3-46ac-83bf-06b0950b7345
+data_generics = subset(data_all, :generic_count => c -> c .> 0)
 
 # ╔═╡ 01286a56-c1a0-4f55-a897-ed5340d4d131
-begin
+function syntax_counts_map(data)
 	syntax_counts = Dict()
-	for row=eachrow(data_ats)
+	for row=eachrow(data)
 		key = (row.crate_name, row.syntax)
 		syntax_counts[key] = get(syntax_counts, key, 0) + 1
 	end
 	syntax_counts
 end
 
-# ╔═╡ fd151a4a-bfb2-44d2-9dd1-eb3c9c72a599
-syntax_count(syntax) = [get(syntax_counts, (crate, syntax), 0) for crate=crates]
+# ╔═╡ 52c82c3f-b36b-4775-a694-806d4e7a46f3
+@bind the_data Select([data_all => "All Traits", data_ats => "With ATs", data_generics => "With Generics"])
 
-# ╔═╡ f1988760-e155-4204-a73a-8019bd251d18
-begin
-	trait_impl_counts = syntax_count("ImplFor") .+ syntax_count("TraitDef")
-	trait_use_counts = syntax_count("WhereClause") .+ syntax_count("TypeImpl") .+ syntax_count("TypeDyn")
+# ╔═╡ 87020a45-17df-4b7e-9a4e-433a9e73ee55
+the_syntax_counts_map = syntax_counts_map(the_data)
+
+# ╔═╡ fd151a4a-bfb2-44d2-9dd1-eb3c9c72a599
+syntax_count(syntax, counts=the_syntax_counts_map) = (get(counts, (crate, syntax), 0) for crate=crates)
+
+# ╔═╡ ec9d3463-e5de-4414-86fd-795644ee8d02
+function counts_and_ratios(data)
+	counts = syntax_counts_map(data)
+	defs = syntax_count("ImplFor", counts) .+ syntax_count("TraitDef", counts)
+	uses = syntax_count("WhereClause", counts) .+ syntax_count("TypeImpl", counts) .+ syntax_count("TypeDyn", counts)
+	totals = defs .+ uses
+	uses ./ totals, totals
 end
 
-# ╔═╡ 3bc5ae8b-fcc6-482d-87f9-8b7938092cf0
-trait_total_counts = trait_use_counts .+ trait_impl_counts
+# ╔═╡ bca9c702-6572-40fa-a458-ac5b568f2f87
+all_ratios, all_totals = counts_and_ratios(data_all);
+
+# ╔═╡ 3bb5137a-4957-42fb-8273-50683b56a175
+ats_ratios, ats_totals = counts_and_ratios(data_ats);
+
+# ╔═╡ 6e201044-e9f4-4905-b606-00b6e5132585
+crate_count(crate, counts=the_syntax_counts_map) = (get(counts, (crate, syntax), 0) for syntax=syntaxes)
 
 # ╔═╡ b591bf54-e903-4e21-aa6e-021892f10424
-trait_usage_ratios = trait_use_counts ./ trait_total_counts
+the_ratios, the_totals = counts_and_ratios(the_data)
 
 # ╔═╡ 81b31100-07ab-4875-9a1b-ab9fbbbfafae
-histogram(trait_usage_ratios, bins=0.0:0.05:1.0, legend=:none, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of Trait Usage")
+histogram(the_ratios, bins=0.0:0.05:1.0, legend=:none, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of $(crates_desc) by Trait Syntax", fillcolor="#f74c00",  fillalpha=0.5)
+
+# ╔═╡ c7b64e8c-b5f4-4dde-9ca2-1c67e7b4a721
+histogram([all_ratios ats_ratios], bins=0.0:0.05:1.0, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of $(crates_desc) by Trait Syntax", fillalpha=0.5, fillcolor=["#f74c00" "#01346b"], labels=["All Traits" "With Associated Types"])
 
 # ╔═╡ 1df1fd4c-b49d-40b5-85f7-4469b88ca322
 scatter(
-	trait_usage_ratios,
-	log.(trait_total_counts),
-	markerstrokewidth=0,
-	markercolor=:black,
+	the_ratios,
+	log.(the_totals),
+	markerstrokewidth=1,
+	markercolor="#f74c00",
 	#zcolor=[log10(repo_sizes[crate]) for crate=crates],
 	ylim = (0, 9),
 	xlabel="proportion of trait usages (bounds, `impl Trait` types)",
 	ylabel="log₁₀ total usages, implementations, and definitons",
 	legend=:none,
-	title="Top 500 Crates on GitHub by Trait Usage",
+	title="Top 500 $(crates_desc) by Trait Syntax",
+	size=(800, 800),
+)
+
+# ╔═╡ 131408f4-de47-46c7-be4f-6f5f40443d61
+scatter(
+	[all_ratios ats_ratios],
+	[log.(all_totals) log.(ats_totals)],
+	markerstrokewidth=1,
+	markercolor=["#f74c00" "#01346b"],
+	#zcolor=[log10(repo_sizes[crate]) for crate=crates],
+	ylim = (0, 10),
+	xlabel="proportion of trait usages (bounds, `impl Trait` types)",
+	ylabel="log₁₀ total usages, implementations, and definitons",
+	label=["All Traits" "With Associated Types"],
+	title="Top 500 $(crates_desc) on GitHub by Trait Syntax",
 	size=(800, 800),
 )
 
 # ╔═╡ 88683fb3-f646-40ff-aab0-032c8d9eee0a
-reverse(sort(collect(countmap(data.trait_name)), by=x->x[2]))
+reverse(sort(collect(countmap(the_data.trait_name)), by=x->x[2]))
+
+# ╔═╡ 83caf3ef-7144-46a6-8841-99dd3cb11fc3
+example_weights = inv.(sum.(crate_count.(the_data.crate_name)) .+ 1)
+
+# ╔═╡ c0398127-788c-4b41-bb8a-9f31fc038bb5
+@bind example_count NumberField(1:100, default=25)
+
+# ╔═╡ b00c897c-0953-4015-90ca-37ca27c88e71
+example_locations = sample(
+	the_data.crate_name .* "/" .* the_data.location .=> the_data.syntax,
+	Weights(example_weights),
+	example_count
+)
+
+# ╔═╡ 3def4263-2625-4464-b6c3-855b9560bdae
+begin
+	example_text = "| syntax | example line |\n| --- | --- |"
+	for (location, syntax) in example_locations
+		path, linenum = split(location, ":")
+		line = readlines("./download/source/" * path)[parse(Int64, linenum)]
+		example_text *= "\n| $(syntax) | $(line) |"
+	end
+	Markdown.parse(example_text)
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -123,6 +189,7 @@ DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Glob = "c27321d9-0574-5035-807b-f59d2c89b15c"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [compat]
@@ -141,7 +208,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.8.0"
 manifest_format = "2.0"
-project_hash = "d8b09158a705ed99b8f33801aca747c491b0e41c"
+project_hash = "3b8e81ff703b7338edc5db2916a29ae3af79608f"
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
@@ -1208,24 +1275,37 @@ version = "1.4.1+0"
 # ╠═b1fdf946-3f3d-4c80-8a75-b1b805293e77
 # ╠═2fc190f2-c587-4ef9-b0c2-38027a3d043e
 # ╠═f00205cc-2179-4747-b63b-c91322cb25ee
+# ╠═2de0278f-bc77-43c8-9c29-3d7db1dddc0b
 # ╠═721da63c-33cf-4e3b-ad09-d69f5663976f
 # ╠═bdf2c442-9bf7-49e6-9b82-2f3b019ad989
 # ╠═7026dbaf-9b0d-4c9a-9a1f-1409dc9f9e08
+# ╠═cb11f347-4153-4964-b8cb-e7ffef3d8f9b
+# ╠═475e0db3-67a7-4571-862d-92d8a004604b
 # ╠═07414be9-58e7-4592-b6fa-47145383490d
 # ╠═baf4a7e6-5b2c-4e01-ad48-b106eb8df01f
 # ╠═e4d161ff-ef87-4c56-995e-7f586ce14d91
 # ╠═6f79bb1c-4627-4d27-91a7-8cb540666e02
 # ╠═1cbb0bdf-ff94-4f11-b027-89821bf35bf2
 # ╠═93f4e165-cddc-4d0d-84a6-766f1fe6d1a9
-# ╠═4a26996c-5d56-49de-8ae1-60471fb05d98
 # ╠═5fb97fb0-a906-4550-8f80-71f406e010fe
+# ╠═a19e800b-9fe3-46ac-83bf-06b0950b7345
 # ╠═01286a56-c1a0-4f55-a897-ed5340d4d131
+# ╠═87020a45-17df-4b7e-9a4e-433a9e73ee55
 # ╠═fd151a4a-bfb2-44d2-9dd1-eb3c9c72a599
-# ╠═f1988760-e155-4204-a73a-8019bd251d18
+# ╠═6e201044-e9f4-4905-b606-00b6e5132585
+# ╠═ec9d3463-e5de-4414-86fd-795644ee8d02
 # ╠═b591bf54-e903-4e21-aa6e-021892f10424
-# ╠═3bc5ae8b-fcc6-482d-87f9-8b7938092cf0
+# ╠═bca9c702-6572-40fa-a458-ac5b568f2f87
+# ╠═3bb5137a-4957-42fb-8273-50683b56a175
+# ╠═52c82c3f-b36b-4775-a694-806d4e7a46f3
 # ╠═81b31100-07ab-4875-9a1b-ab9fbbbfafae
+# ╠═c7b64e8c-b5f4-4dde-9ca2-1c67e7b4a721
 # ╠═1df1fd4c-b49d-40b5-85f7-4469b88ca322
+# ╠═131408f4-de47-46c7-be4f-6f5f40443d61
 # ╠═88683fb3-f646-40ff-aab0-032c8d9eee0a
+# ╠═83caf3ef-7144-46a6-8841-99dd3cb11fc3
+# ╠═b00c897c-0953-4015-90ca-37ca27c88e71
+# ╠═c0398127-788c-4b41-bb8a-9f31fc038bb5
+# ╠═3def4263-2625-4464-b6c3-855b9560bdae
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

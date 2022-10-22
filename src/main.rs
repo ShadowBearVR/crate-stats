@@ -1,5 +1,6 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use glob::glob;
+use syn::spanned::Spanned;
 // use rayon::{prelude::*};
 use std::fs;
 use std::io::Write;
@@ -32,6 +33,7 @@ struct Row {
     at_count: usize,
     trait_name: String,
     crate_name: String,
+    location: String,
 }
 
 #[derive(Default, Debug)]
@@ -106,6 +108,7 @@ impl<R: Rows> Rows for Arc<Mutex<R>> {
 struct Stats<R: Rows> {
     rows: R,
     crate_name: String,
+    file_name: String,
 }
 
 impl<R: Rows> Visit<'_> for Stats<R> {
@@ -171,6 +174,7 @@ impl<R: Rows> Visit<'_> for Stats<R> {
             at_count,
             trait_name: node.ident.to_string(),
             crate_name: self.crate_name.clone(),
+            location: format!("{}:{}", &self.file_name, node.ident.span().start().line),
         });
     }
 }
@@ -218,6 +222,7 @@ impl<R: Rows> Stats<R> {
             at_count: counter.at_count + base_at_count,
             trait_name,
             crate_name: self.crate_name.clone(),
+            location: format!("{}:{}", &self.file_name, path.span().start().line),
         });
     }
 
@@ -235,15 +240,22 @@ impl<R: Rows> Stats<R> {
     }
 }
 
-#[test]
-fn test_impl_for() {
+#[cfg(test)]
+fn collect_mock(name: &str) -> Vec<Row> {
+    let file_name = format!("./mocks/{name}.rs");
     let mut stats = Stats {
         rows: Vec::<Row>::new(),
-        crate_name: "impl_for".to_string(),
+        crate_name: name.to_string(),
+        file_name: file_name.clone(),
     };
-    stats.collect("./mocks/impl_for.rs").unwrap();
+    stats.collect(&file_name).unwrap();
+    return stats.rows;
+}
+
+#[test]
+fn test_impl_for() {
     assert_eq!(
-        stats.rows,
+        collect_mock("impl_for"),
         vec![Row {
             syntax: SyntaxType::ImplFor,
             position: None,
@@ -251,19 +263,15 @@ fn test_impl_for() {
             at_count: 1,
             trait_name: "Iterator".to_string(),
             crate_name: "impl_for".to_string(),
+            location: "./mocks/impl_for.rs:3".to_string(),
         }]
     )
 }
 
 #[test]
 fn test_iterator_arg() {
-    let mut stats = Stats {
-        rows: Vec::<Row>::new(),
-        crate_name: "iterator_arg".to_string(),
-    };
-    stats.collect("./mocks/iterator_arg.rs").unwrap();
     assert_eq!(
-        stats.rows,
+        collect_mock("iterator_arg"),
         vec![Row {
             syntax: SyntaxType::TypeImpl,
             position: Some(Position::Argument),
@@ -271,19 +279,74 @@ fn test_iterator_arg() {
             at_count: 1,
             trait_name: "Iterator".to_string(),
             crate_name: "iterator_arg".to_string(),
+            location: "./mocks/iterator_arg.rs:1".to_string(),
         }]
     )
 }
 
 #[test]
-fn test_where_clause() {
-    let mut stats = Stats {
-        rows: Vec::<Row>::new(),
-        crate_name: "where_clause".to_string(),
-    };
-    stats.collect("./mocks/where_clause.rs").unwrap();
+fn test_iterator_ret() {
     assert_eq!(
-        stats.rows,
+        collect_mock("iterator_ret"),
+        vec![Row {
+            syntax: SyntaxType::TypeImpl,
+            position: Some(Position::Return),
+            generic_count: 0,
+            at_count: 1,
+            trait_name: "Iterator".to_string(),
+            crate_name: "iterator_ret".to_string(),
+            location: "./mocks/iterator_ret.rs:1".to_string(),
+        }]
+    )
+}
+
+#[test]
+fn test_dyn_iterator_arg() {
+    assert_eq!(
+        collect_mock("dyn_iterator_arg"),
+        vec![Row {
+            syntax: SyntaxType::TypeDyn,
+            position: Some(Position::Argument),
+            generic_count: 0,
+            at_count: 1,
+            trait_name: "Iterator".to_string(),
+            crate_name: "dyn_iterator_arg".to_string(),
+            location: "./mocks/dyn_iterator_arg.rs:1".to_string(),
+        }]
+    )
+}
+
+#[test]
+fn test_many_generics() {
+    assert_eq!(
+        collect_mock("many_generics"),
+        vec![
+            Row {
+                syntax: SyntaxType::TraitDef,
+                position: None,
+                generic_count: 3,
+                at_count: 1,
+                trait_name: "Mock".to_string(),
+                crate_name: "many_generics".to_string(),
+                location: "./mocks/many_generics.rs:1".to_string(),
+            },
+            Row {
+                syntax: SyntaxType::TypeImpl,
+                position: Some(Position::Argument),
+                generic_count: 3,
+                at_count: 0,
+                trait_name: "Mock".to_string(),
+                crate_name: "many_generics".to_string(),
+                location: "./mocks/many_generics.rs:5".to_string(),
+            }
+        ]
+    )
+}
+
+#[test]
+fn test_where_clause() {
+    assert_eq!(
+        collect_mock("where_clause"),
         vec![Row {
             syntax: SyntaxType::WhereClause,
             position: None,
@@ -291,6 +354,7 @@ fn test_where_clause() {
             at_count: 1,
             trait_name: "Iterator".to_string(),
             crate_name: "where_clause".to_string(),
+            location: "./mocks/where_clause.rs:3".to_string(),
         }]
     )
 }
@@ -314,6 +378,7 @@ fn run(mut stats: Stats<impl Rows>, source_path: &Path, source: &str) {
             let path = path.unwrap().canonicalize().unwrap();
             let mut components = path.strip_prefix(&source_path).unwrap().components();
             let crate_name = components.next().unwrap();
+            let file_name = path.strip_prefix(&source_path.join(crate_name)).unwrap();
             if components.any(|s| {
                 let s = s.as_os_str().to_str().unwrap();
                 let s = s.trim_end_matches(".rs");
@@ -323,6 +388,7 @@ fn run(mut stats: Stats<impl Rows>, source_path: &Path, source: &str) {
                 continue;
             }
             stats.crate_name = crate_name.as_os_str().to_str().unwrap().to_string();
+            stats.file_name = file_name.display().to_string();
             if let Err(err) = stats.collect(&path) {
                 eprintln!(
                     "Error parsing {}:{}: {}",
@@ -370,6 +436,7 @@ fn main() {
     let stats = Stats {
         rows: output,
         crate_name: "".to_string(),
+        file_name: "".to_string(),
     };
 
     thread::Builder::new()
