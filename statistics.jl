@@ -41,6 +41,21 @@ import CSV
 # ╔═╡ bdf2c442-9bf7-49e6-9b82-2f3b019ad989
 data = DataFrame(CSV.File(path, stringtype=String))
 
+# ╔═╡ 7026dbaf-9b0d-4c9a-9a1f-1409dc9f9e08
+search_data = DataFrame(CSV.File("./download/github-search-dump.csv", stringtype=String))
+
+# ╔═╡ 07414be9-58e7-4592-b6fa-47145383490d
+github_names = search_data.name .* '-' .* search_data.head
+
+# ╔═╡ baf4a7e6-5b2c-4e01-ad48-b106eb8df01f
+repo_star_counts = Dict(github_names .=> search_data.stargazers_count)
+
+# ╔═╡ e4d161ff-ef87-4c56-995e-7f586ce14d91
+repo_issue_counts = Dict(github_names .=> search_data.open_issues_count)
+
+# ╔═╡ 6f79bb1c-4627-4d27-91a7-8cb540666e02
+repo_sizes = Dict(github_names .=> search_data.size)
+
 # ╔═╡ 1cbb0bdf-ff94-4f11-b027-89821bf35bf2
 syntaxes = levels(data.syntax)
 
@@ -48,27 +63,56 @@ syntaxes = levels(data.syntax)
 crates = levels(data.crate_name)
 
 # ╔═╡ 4a26996c-5d56-49de-8ae1-60471fb05d98
-trait_filter(name) = true
+trait_filter(name) = !(name in ["Clone", "Copy", "Debug", "PartialEq", "Eq", "Display"])
 
-# ╔═╡ 34787e36-ae88-47ea-9c96-4883425e6d02
-syntax_counts = Dict(crate => countmap(
-	filter(r -> r.crate_name == crate && trait_filter(r.trait_name), data).syntax,
-) for crate=crates)
+# ╔═╡ 5fb97fb0-a906-4550-8f80-71f406e010fe
+data_ats = subset(data, :at_count => c -> c .> 0)
+
+# ╔═╡ 01286a56-c1a0-4f55-a897-ed5340d4d131
+begin
+	syntax_counts = Dict()
+	for row=eachrow(data_ats)
+		key = (row.crate_name, row.syntax)
+		syntax_counts[key] = get(syntax_counts, key, 0) + 1
+	end
+	syntax_counts
+end
 
 # ╔═╡ fd151a4a-bfb2-44d2-9dd1-eb3c9c72a599
-syntax_count(syntax) = get.(values(syntax_counts), syntax, 0)
+syntax_count(syntax) = [get(syntax_counts, (crate, syntax), 0) for crate=crates]
+
+# ╔═╡ f1988760-e155-4204-a73a-8019bd251d18
+begin
+	trait_impl_counts = syntax_count("ImplFor") .+ syntax_count("TraitDef")
+	trait_use_counts = syntax_count("WhereClause") .+ syntax_count("TypeImpl") .+ syntax_count("TypeDyn")
+end
+
+# ╔═╡ 3bc5ae8b-fcc6-482d-87f9-8b7938092cf0
+trait_total_counts = trait_use_counts .+ trait_impl_counts
+
+# ╔═╡ b591bf54-e903-4e21-aa6e-021892f10424
+trait_usage_ratios = trait_use_counts ./ trait_total_counts
+
+# ╔═╡ 81b31100-07ab-4875-9a1b-ab9fbbbfafae
+histogram(trait_usage_ratios, bins=0.0:0.05:1.0, legend=:none, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of Trait Usage")
 
 # ╔═╡ 1df1fd4c-b49d-40b5-85f7-4469b88ca322
 scatter(
-	syntax_count("ImplFor"),
-	syntax_count("WhereClause") .+ syntax_count("TypeImpl") .+ syntax_count("TypeDyn"),
-	axis = :log,
-	xlim=(1, 1e4),
-	ylim=(1, 1e4),
-	xlabel="# of trait implementors",
-	ylabel="# of trait uses",
+	trait_usage_ratios,
+	log.(trait_total_counts),
+	markerstrokewidth=0,
+	markercolor=:black,
+	#zcolor=[log10(repo_sizes[crate]) for crate=crates],
+	ylim = (0, 9),
+	xlabel="proportion of trait usages (bounds, `impl Trait` types)",
+	ylabel="log₁₀ total usages, implementations, and definitons",
 	legend=:none,
+	title="Top 500 Crates on GitHub by Trait Usage",
+	size=(800, 800),
 )
+
+# ╔═╡ 88683fb3-f646-40ff-aab0-032c8d9eee0a
+reverse(sort(collect(countmap(data.trait_name)), by=x->x[2]))
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -1166,11 +1210,22 @@ version = "1.4.1+0"
 # ╠═f00205cc-2179-4747-b63b-c91322cb25ee
 # ╠═721da63c-33cf-4e3b-ad09-d69f5663976f
 # ╠═bdf2c442-9bf7-49e6-9b82-2f3b019ad989
+# ╠═7026dbaf-9b0d-4c9a-9a1f-1409dc9f9e08
+# ╠═07414be9-58e7-4592-b6fa-47145383490d
+# ╠═baf4a7e6-5b2c-4e01-ad48-b106eb8df01f
+# ╠═e4d161ff-ef87-4c56-995e-7f586ce14d91
+# ╠═6f79bb1c-4627-4d27-91a7-8cb540666e02
 # ╠═1cbb0bdf-ff94-4f11-b027-89821bf35bf2
 # ╠═93f4e165-cddc-4d0d-84a6-766f1fe6d1a9
 # ╠═4a26996c-5d56-49de-8ae1-60471fb05d98
-# ╠═34787e36-ae88-47ea-9c96-4883425e6d02
+# ╠═5fb97fb0-a906-4550-8f80-71f406e010fe
+# ╠═01286a56-c1a0-4f55-a897-ed5340d4d131
 # ╠═fd151a4a-bfb2-44d2-9dd1-eb3c9c72a599
+# ╠═f1988760-e155-4204-a73a-8019bd251d18
+# ╠═b591bf54-e903-4e21-aa6e-021892f10424
+# ╠═3bc5ae8b-fcc6-482d-87f9-8b7938092cf0
+# ╠═81b31100-07ab-4875-9a1b-ab9fbbbfafae
 # ╠═1df1fd4c-b49d-40b5-85f7-4469b88ca322
+# ╠═88683fb3-f646-40ff-aab0-032c8d9eee0a
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

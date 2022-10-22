@@ -41,6 +41,7 @@ pub fn unpack_tar_gz(url: &str, into: &Path) -> Result<(), Error> {
     fs::create_dir_all(into)?;
     let read = ureq::get(url)
         .set("User-Agent", USER_AGENT)
+        .timeout(Duration::from_secs(60 * 5))
         .call()?
         .into_reader();
     let mut archive = Archive::new(GzDecoder::new(read));

@@ -1,7 +1,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use glob::glob;
-use rayon::{prelude::*, ThreadBuilder};
-use std::fs::{self};
+// use rayon::{prelude::*};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -312,12 +312,16 @@ fn run(mut stats: Stats<impl Rows>, source_path: &Path, source: &str) {
     } else {
         for path in glob(&format!("{source}/**/*.rs")).unwrap() {
             let path = path.unwrap().canonicalize().unwrap();
-            let crate_name = path
-                .strip_prefix(&source_path)
-                .unwrap()
-                .components()
-                .next()
-                .unwrap();
+            let mut components = path.strip_prefix(&source_path).unwrap().components();
+            let crate_name = components.next().unwrap();
+            if components.any(|s| {
+                let s = s.as_os_str().to_str().unwrap();
+                let s = s.trim_end_matches(".rs");
+                s == "test" || s == "tests" || s == "test_data"
+            }) {
+                // Don't include test files
+                continue;
+            }
             stats.crate_name = crate_name.as_os_str().to_str().unwrap().to_string();
             if let Err(err) = stats.collect(&path) {
                 eprintln!(
