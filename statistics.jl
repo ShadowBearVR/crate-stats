@@ -188,22 +188,9 @@ end
 the_syntax_counts_map = syntax_counts_map(the_data)
 
 # ╔═╡ fd151a4a-bfb2-44d2-9dd1-eb3c9c72a599
-syntax_count(syntax, counts=the_syntax_counts_map) = (get(counts, (crate, syntax), 0) for crate=crates)
-
-# ╔═╡ ec9d3463-e5de-4414-86fd-795644ee8d02
-function syntax_counts_and_ratios(data)
-	counts = syntax_counts_map(data)
-	defs = syntax_count("ImplFor", counts) .+ syntax_count("TraitDef", counts)
-	uses = syntax_count("WhereClause", counts) .+ syntax_count("TypeImpl", counts) .+ syntax_count("TypeDyn", counts)
-	totals = defs .+ uses
-	uses ./ totals, totals
-end
-
-# ╔═╡ bca9c702-6572-40fa-a458-ac5b568f2f87
-all_ratios, all_totals = syntax_counts_and_ratios(data_all);
-
-# ╔═╡ 3bb5137a-4957-42fb-8273-50683b56a175
-ats_ratios, ats_totals = syntax_counts_and_ratios(data_ats);
+syntax_count(syntax, counts=the_syntax_counts_map) = (
+	get(counts, (crate, syntax), 0.0) for crate=crates
+)
 
 # ╔═╡ 0ab2db7b-8a48-4b87-b92a-e27a951368b6
 function trait_counts_and_ratios(data)
@@ -217,8 +204,40 @@ end
 # ╔═╡ 6e201044-e9f4-4905-b606-00b6e5132585
 crate_count(crate, counts=the_syntax_counts_map) = (get(counts, (crate, syntax), 0) for syntax=syntaxes)
 
+# ╔═╡ 7f82c555-1a9b-400a-814c-7eb1215556a8
+@bind the_exclude0 CheckBox(true)
+
+# ╔═╡ a5723518-6e82-4233-86d1-001ed5cbebb4
+@bind the_fuzzy CheckBox(true)
+
+# ╔═╡ ec9d3463-e5de-4414-86fd-795644ee8d02
+function syntax_counts_and_ratios(data, fuzzy=the_fuzzy, exclude0=the_exclude0)
+	counts = syntax_counts_map(data)
+	defs = syntax_count("ImplFor", counts) .+ syntax_count("TraitDef", counts)
+	uses = syntax_count("WhereClause", counts) .+ syntax_count("TypeImpl", counts) .+ syntax_count("TypeDyn", counts)
+	for i=1:length(defs)
+		if exclude0 && defs[i] == 0 && uses[i] == 0
+			uses[i] = NaN
+			defs[i] = NaN
+		end
+	end
+	real_totals = defs .+ uses
+	t = fuzzy ? rand(Float32, length(crates)) : 0.0
+	s = fuzzy ? 1.0 .- t : 0.0
+	defs .+= t
+	uses .+= s
+	fuzzy_totals = defs .+ uses
+	uses ./ fuzzy_totals, real_totals
+end
+
 # ╔═╡ b591bf54-e903-4e21-aa6e-021892f10424
 the_ratios, the_totals = syntax_counts_and_ratios(the_data)
+
+# ╔═╡ bca9c702-6572-40fa-a458-ac5b568f2f87
+all_ratios, all_totals = syntax_counts_and_ratios(data_all);
+
+# ╔═╡ 3bb5137a-4957-42fb-8273-50683b56a175
+ats_ratios, ats_totals = syntax_counts_and_ratios(data_ats);
 
 # ╔═╡ 81b31100-07ab-4875-9a1b-ab9fbbbfafae
 histogram(the_ratios, bins=0.0:0.05:1.0, legend=:none, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of $(crates_desc) by Trait Syntax", fillcolor="#f74c00",  fillalpha=0.5)
@@ -237,7 +256,7 @@ scatter(
 	xlabel="proportion of trait usages (bounds, `impl/dyn Trait` types)",
 	ylabel="log₁₀ total usages, implementations, and definitons",
 	legend=:none,
-	title="Top $(length(crates)) $(crates_desc) by Trait Syntax",
+	title="$(crates_desc) by Trait Syntax",
 	size=(800, 800),
 	markeralpha=0.5,
 )
@@ -253,7 +272,7 @@ scatter(
 	xlabel="proportion of trait usages (bounds, `impl/dyn Trait` types)",
 	ylabel="log₁₀ total usages, implementations, and definitons",
 	label=["All Traits" "With Associated Types Only"],
-	title="Top $(length(crates)) $(crates_desc) on GitHub by Trait Syntax",
+	title="$(crates_desc) on GitHub by Trait Syntax",
 	size=(800, 800),
 	markeralpha=0.3,
 )
@@ -1436,6 +1455,8 @@ version = "1.4.1+0"
 # ╠═3bb5137a-4957-42fb-8273-50683b56a175
 # ╠═0ab2db7b-8a48-4b87-b92a-e27a951368b6
 # ╠═52c82c3f-b36b-4775-a694-806d4e7a46f3
+# ╠═7f82c555-1a9b-400a-814c-7eb1215556a8
+# ╠═a5723518-6e82-4233-86d1-001ed5cbebb4
 # ╠═81b31100-07ab-4875-9a1b-ab9fbbbfafae
 # ╠═c7b64e8c-b5f4-4dde-9ca2-1c67e7b4a721
 # ╠═1df1fd4c-b49d-40b5-85f7-4469b88ca322
