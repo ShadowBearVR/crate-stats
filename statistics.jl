@@ -84,10 +84,13 @@ data_ats = subset(data_all, :at_count => c -> c .> 0)
 data_generics = subset(data_all, :generic_count => c -> c .> 0)
 
 # ╔═╡ af9253cd-f89e-4eb2-8456-a74f139af765
-function count_matrix(data, axes...)
-	axes_vals = [sort(levels(data[:, axis], skipmissing=false)) for axis=axes]
+function count_matrix(data, axes...; skipmissing=false)
+	axes_vals = [sort(levels(data[:, axis], skipmissing=skipmissing)) for axis=axes]
 	counts = zeros(Int32, length.(axes_vals)...)
 	for ent=eachrow(data)
+		if skipmissing && any(ent[axis] === missing for axis=axes)
+			continue
+		end
 		idxs = [
 			searchsortedfirst(vals, ent[axis]) for (axis, vals)=zip(axes, axes_vals)
 		]
@@ -108,10 +111,23 @@ begin
 	fmt_percent(x::R) where R<:Real = Printf.@sprintf("%0.2f%%", x * 100)
 end
 
+# ╔═╡ caeb480c-1909-4866-9c2a-45ed978d1fdb
+function makefinite!(array, val=0)
+	for i=eachindex(array)
+		if !isfinite(array[i])
+			array[i] = val
+		end
+	end
+end
+
+# ╔═╡ 67ce1df6-5b90-47b1-8ca1-c0bcc25949a1
+nan2val(x, val=0) where V = isfinite(x) ? x : val
+
 # ╔═╡ e5cd1788-7c1f-4a82-9579-8b13c60aedd9
 function mean_proportions_table(data, by, of; range=(:))
 	table, by_vals, of_vals = count_matrix(data, by, of)
 	table = table ./ sum(table, dims=1)
+	makefinite!(table)
 	table = view(mean(table, dims=2), :, 1)
 	table = by_vals .=> table
 	table = sort(
@@ -144,13 +160,20 @@ end
 
 # ╔═╡ d988e5d5-5484-4a47-883f-cd58cbe42275
 function mean_proportions_table(data, by_rows, by_columns, of; range=(:))
-	table, row_axis, col_axis = count_matrix(the_data, by_rows, by_columns, of)
+	table, row_axis, col_axis = if of !== nothing
+		count_matrix(the_data, by_rows, by_columns, of)
+	else
+		count_matrix(the_data, by_rows, by_columns)
+	end
 	table = table ./ sum(table, dims=(1,2))
-	table = view(mean(table, dims=3), :, :, 1)
+	makefinite!(table)
+	if of !== nothing
+		table = view(mean(table, dims=3), :, :, 1)
+	end
 	table = hcat(row_axis, table)
 	table = sortslices(
 		table, dims=1,
-		by=row->sum(row[2,:]),
+		by=row->sum(row[2:end,:]),
 		order=Base.Reverse,
 	)[range, :]
 	text = "| $(by_rows) | " * join(col_axis, " | ") * " |\n"
@@ -201,7 +224,7 @@ the_ratios, the_totals = syntax_counts_and_ratios(the_data)
 histogram(the_ratios, bins=0.0:0.05:1.0, legend=:none, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of $(crates_desc) by Trait Syntax", fillcolor="#f74c00",  fillalpha=0.5)
 
 # ╔═╡ c7b64e8c-b5f4-4dde-9ca2-1c67e7b4a721
-histogram([all_ratios ats_ratios], bins=0.0:0.05:1.0, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of $(crates_desc) by Trait Syntax", fillalpha=0.5, fillcolor=["#f74c00" "#01346b"], labels=["All Traits" "With Associated Types"])
+histogram([all_ratios ats_ratios], bins=0.0:0.05:1.0, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of $(crates_desc) by Trait Syntax", fillalpha=0.5, fillcolor=["#f74c00" "#01346b"], labels=["All Traits" "With Associated Types Only"])
 
 # ╔═╡ 1df1fd4c-b49d-40b5-85f7-4469b88ca322
 scatter(
@@ -211,10 +234,10 @@ scatter(
 	markercolor="#f74c00",
 	#zcolor=[log10(repo_sizes[crate]) for crate=crates],
 	ylim = (0, 5),
-	xlabel="proportion of trait usages (bounds, `impl Trait` types)",
+	xlabel="proportion of trait usages (bounds, `impl/dyn Trait` types)",
 	ylabel="log₁₀ total usages, implementations, and definitons",
 	legend=:none,
-	title="Top 500 $(crates_desc) by Trait Syntax",
+	title="Top $(length(crates)) $(crates_desc) by Trait Syntax",
 	size=(800, 800),
 	markeralpha=0.5,
 )
@@ -227,12 +250,12 @@ scatter(
 	markercolor=["#f74c00" "#01346b"],
 	#zcolor=[log10(repo_sizes[crate]) for crate=crates],
 	ylim = (0, 5),
-	xlabel="proportion of trait usages (bounds, `impl Trait` types)",
+	xlabel="proportion of trait usages (bounds, `impl/dyn Trait` types)",
 	ylabel="log₁₀ total usages, implementations, and definitons",
-	label=["All Traits" "With Associated Types"],
-	title="Top 500 $(crates_desc) on GitHub by Trait Syntax",
+	label=["All Traits" "With Associated Types Only"],
+	title="Top $(length(crates)) $(crates_desc) on GitHub by Trait Syntax",
 	size=(800, 800),
-	markeralpha=0.5,
+	markeralpha=0.3,
 )
 
 # ╔═╡ 88683fb3-f646-40ff-aab0-032c8d9eee0a
@@ -276,6 +299,12 @@ mean_proportions_table(the_data, :trait_name, :position, :crate_name, range=1:ex
 
 # ╔═╡ e11f54ef-d2c7-4828-8350-774419c29f5c
 # mean_proportions_table(the_data, :position, :trait_name)
+
+# ╔═╡ 2c767eac-af9c-4f55-ba9c-8913cb8508b3
+mean_proportions_table(the_data, :trait_name, :syntax, nothing, range=1:example_count)
+
+# ╔═╡ 8397957e-bd36-49ae-bc1f-be891e50b89b
+mean_proportions_table(the_data, :trait_name, :position, nothing, range=1:example_count)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -1392,6 +1421,8 @@ version = "1.4.1+0"
 # ╠═af9253cd-f89e-4eb2-8456-a74f139af765
 # ╠═29e21236-56d6-4340-bec0-87a2104550c2
 # ╠═e8da631a-5bcd-4d68-9ec9-9e63ed019863
+# ╠═caeb480c-1909-4866-9c2a-45ed978d1fdb
+# ╠═67ce1df6-5b90-47b1-8ca1-c0bcc25949a1
 # ╠═e5cd1788-7c1f-4a82-9579-8b13c60aedd9
 # ╠═d988e5d5-5484-4a47-883f-cd58cbe42275
 # ╠═6bbcbf7d-2d4e-4f96-a0ee-f665fb83178c
@@ -1419,5 +1450,7 @@ version = "1.4.1+0"
 # ╠═6deb9122-7f7f-4ed6-8609-36d05ce93876
 # ╠═51e98fdf-160d-4fb8-80bf-d12dea27cabf
 # ╠═e11f54ef-d2c7-4828-8350-774419c29f5c
+# ╠═2c767eac-af9c-4f55-ba9c-8913cb8508b3
+# ╠═8397957e-bd36-49ae-bc1f-be891e50b89b
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
