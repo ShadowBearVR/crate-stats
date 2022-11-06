@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Error};
 use clap::Parser;
 use flate2::read::GzDecoder;
+use git2::Repository;
 use indicatif::ProgressBar;
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -18,9 +19,9 @@ struct Args {
     output: PathBuf,
     #[arg(short = 'u', long)]
     update_crates_db: bool,
-    #[arg(short = 'c', long, default_value_t = 100)]
+    #[arg(short = 'c', long, default_value_t = 0)]
     cratesio_count: usize,
-    #[arg(short = 'g', long, default_value_t = 100)]
+    #[arg(short = 'g', long, default_value_t = 0)]
     github_count: usize,
     #[arg(long, default_value_t = 10)]
     github_db_pages: usize,
@@ -32,6 +33,8 @@ struct Args {
     update_github_db: bool,
     #[arg(short = 'a', long, default_value = "1y")]
     max_age: humantime::Duration,
+    #[arg(short = 'C', long)]
+    clone_repos: bool,
 }
 
 const USER_AGENT: &str = "syntax-sugar-survey (slsartor@wm.edu)";
@@ -250,6 +253,59 @@ fn search_github(
     Ok(())
 }
 
+fn download_github_repo(
+    source_dir: &Path,
+    name: &str,
+    full_name: &str,
+    _branch: &str,
+    sha: &str,
+    should_exclude: bool,
+) -> Result<PathBuf, Error> {
+    let url = format!("https://github.com/{full_name}/archive/{sha}.tar.gz");
+    let source_path = source_dir.join(&format!("{name}-{sha}"));
+    if should_exclude {
+        if source_path.exists() {
+            fs::remove_dir_all(&source_path)?;
+        }
+        return Ok(source_path);
+    }
+    if !source_path.exists() {
+        unpack_tar_gz(&url, &source_dir)?;
+    }
+    Ok(source_path)
+}
+
+fn clone_github_repo(
+    source_dir: &Path,
+    name: &str,
+    full_name: &str,
+    branch: &str,
+    sha: &str,
+    should_exclude: bool,
+) -> Result<PathBuf, Error> {
+    let url = format!("https://github.com/{full_name}.git");
+    let source_path = source_dir.join(&format!("{name}-git"));
+    if should_exclude {
+        if source_path.exists() {
+            fs::remove_dir_all(&source_path)?;
+        }
+        return Ok(source_path);
+    }
+    let repo;
+    let mut remote;
+    if source_path.exists() {
+        repo = Repository::open(&source_path)?;
+        remote = repo.find_remote("origin")?;
+    } else {
+        repo = Repository::init(&source_path)?;
+        remote = repo.remote("origin", &url)?;
+    }
+    remote.fetch(&[branch], None, None)?;
+    let to_checkout = repo.find_object(sha.parse()?, Some(git2::ObjectType::Commit))?;
+    repo.reset(&to_checkout, git2::ResetType::Hard, None)?;
+    Ok(source_path)
+}
+
 fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
     let latest_dump = output.join("github-search-dump.csv");
     if !latest_dump.is_file() || args.update_github_db {
@@ -269,30 +325,32 @@ fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
     for repo in repos {
         let name = &repo.name;
         let full_name = &repo.full_name;
-        if full_name == "rust-lang/rust" {
-            // The rust repo has too much weird syntax
-            bar.inc(1);
+        let Some(sha) = &repo.head else {
+            eprintln!("Repo {full_name} is missing HEAD");
             continue;
-        }
-
-        let sha = match &repo.head {
-            Some(s) => s,
-            None => {
-                eprintln!("Repo {full_name} is missing HEAD");
-                continue;
-            }
         };
-        let url = format!("https://github.com/{full_name}/archive/{sha}.tar.gz");
-        let source_name = format!("{name}-{sha}");
-        if source_dir.join(&source_name).exists() {
-            // Already downloaded
-            if repo.should_exclude() {
-                fs::remove_dir_all(source_dir.join(&source_name))?;
-            }
+
+        let res = if args.clone_repos {
+            clone_github_repo(
+                &source_dir,
+                name,
+                full_name,
+                &repo.default_branch,
+                sha,
+                repo.should_exclude(),
+            )
         } else {
-            if !repo.should_exclude() {
-                unpack_tar_gz(&url, &source_dir)?;
-            }
+            download_github_repo(
+                &source_dir,
+                name,
+                full_name,
+                &repo.default_branch,
+                sha,
+                repo.should_exclude(),
+            )
+        };
+        if let Err(err) = res {
+            eprintln!("Could not download {full_name}: {err:?}");
         }
         bar.inc(1);
     }
