@@ -5,9 +5,9 @@ use git2::Repository;
 use indicatif::ProgressBar;
 use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+use std::{fs, thread};
 use tar::Archive;
 
 /// Download a bunch of rust crates
@@ -17,24 +17,36 @@ struct Args {
     /// Directory to save output files
     #[arg(default_value = "./download")]
     output: PathBuf,
+    /// Redownload the crates.io index
     #[arg(short = 'u', long)]
     update_crates_db: bool,
+    /// The maximum number of crates.io crates to download
     #[arg(short = 'c', long, default_value_t = 0)]
     cratesio_count: usize,
+    /// The maximum number of GitHub repos to download
     #[arg(short = 'g', long, default_value_t = 0)]
     github_count: usize,
+    /// How many pages of search results to fetch from GitHub
     #[arg(long, default_value_t = 10)]
     github_db_pages: usize,
+    /// How many search results per page to fetch from GitHub
     #[arg(long, default_value_t = 100)]
     github_db_per_page: usize,
+    /// The API token used for searching GitHub
     #[arg(long)]
     github_token: Option<String>,
-    #[arg(short = 'u', long)]
+    /// Rerun the GitHub repo search and pull new versions
+    #[arg(short = 'u', long, requires = "github_token")]
     update_github_db: bool,
+    /// Exclude crates/repos that have not been updated within the given duration
     #[arg(short = 'a', long, default_value = "1y")]
     max_age: humantime::Duration,
+    /// Fetch the entire version history of each GitHub repo
     #[arg(short = 'C', long)]
     clone_repos: bool,
+    /// Time to sleep between downloads
+    #[arg(short = 's', long, default_value = "0s")]
+    sleep: humantime::Duration,
 }
 
 const USER_AGENT: &str = "syntax-sugar-survey (slsartor@wm.edu)";
@@ -73,18 +85,10 @@ pub struct VersionRow {
     pub created_at: SystemTime,
 }
 
-fn download_cratesio(
-    &Args {
-        cratesio_count,
-        update_crates_db,
-        max_age,
-        ..
-    }: &Args,
-    output: &Path,
-) -> Result<(), Error> {
+fn download_cratesio(args: &Args, output: &Path) -> Result<(), Error> {
     // Download a dump of crates.io if needed
     let db_dump = output.join("crates-db-dump");
-    if !db_dump.exists() || update_crates_db {
+    if !db_dump.exists() || args.update_crates_db {
         unpack_tar_gz("https://static.crates.io/db-dump.tar.gz", &db_dump)?;
     }
 
@@ -109,10 +113,10 @@ fn download_cratesio(
 
     // Filter down the list of crates
     let now = SystemTime::now();
-    let max_age: Duration = max_age.into();
+    let max_age: Duration = args.max_age.into();
     crates.retain(|row| row.updated_at > now - max_age);
     crates.sort_unstable_by_key(|row| Reverse(row.downloads));
-    crates.truncate(cratesio_count);
+    crates.truncate(args.cratesio_count);
 
     // Create initial version lists
     let mut versions = HashMap::<u64, Vec<VersionRow>>::new();
@@ -161,6 +165,7 @@ fn download_cratesio(
         }
 
         bar.inc(1);
+        thread::sleep(args.sleep.into());
     }
 
     bar.finish();
@@ -254,56 +259,53 @@ fn search_github(
 }
 
 fn download_github_repo(
-    source_dir: &Path,
-    name: &str,
+    source_path: &Path,
     full_name: &str,
     _branch: &str,
     sha: &str,
-    should_exclude: bool,
-) -> Result<PathBuf, Error> {
+) -> Result<(), Error> {
     let url = format!("https://github.com/{full_name}/archive/{sha}.tar.gz");
-    let source_path = source_dir.join(&format!("{name}-{sha}"));
-    if should_exclude {
-        if source_path.exists() {
-            fs::remove_dir_all(&source_path)?;
-        }
-        return Ok(source_path);
-    }
     if !source_path.exists() {
-        unpack_tar_gz(&url, &source_dir)?;
+        unpack_tar_gz(&url, &source_path.parent().unwrap())?;
     }
-    Ok(source_path)
+    Ok(())
 }
 
 fn clone_github_repo(
-    source_dir: &Path,
-    name: &str,
+    source_path: &Path,
     full_name: &str,
     branch: &str,
     sha: &str,
-    should_exclude: bool,
-) -> Result<PathBuf, Error> {
+) -> Result<(), Error> {
     let url = format!("https://github.com/{full_name}.git");
-    let source_path = source_dir.join(&format!("{name}-git"));
-    if should_exclude {
-        if source_path.exists() {
-            fs::remove_dir_all(&source_path)?;
-        }
-        return Ok(source_path);
-    }
+    let shaid: git2::Oid = sha.parse()?;
+    let shaty = Some(git2::ObjectType::Commit);
     let repo;
     let mut remote;
-    if source_path.exists() {
-        repo = Repository::open(&source_path)?;
-        remote = repo.find_remote("origin")?;
-    } else {
-        repo = Repository::init(&source_path)?;
-        remote = repo.remote("origin", &url)?;
-    }
-    remote.fetch(&[branch], None, None)?;
-    let to_checkout = repo.find_object(sha.parse()?, Some(git2::ObjectType::Commit))?;
+    let to_checkout = 'fetch_repo: {
+        if source_path.exists() {
+            repo = Repository::open(&source_path)?;
+            if let Ok(to_checkout) = repo.find_object(shaid, shaty) {
+                // has the correct sha already fetched
+                break 'fetch_repo to_checkout;
+            }
+            remote = repo.find_remote("origin")?;
+        } else {
+            repo = Repository::init(&source_path)?;
+            remote = repo.remote("origin", &url)?;
+        }
+        remote.fetch(&[branch], None, None)?;
+        match repo.find_object(shaid, shaty) {
+            Ok(o) => o,
+            Err(_) => {
+                // try to recover by fetching the specific sha
+                remote.fetch(&[sha], None, None)?;
+                repo.find_object(shaid, shaty)?
+            }
+        }
+    };
     repo.reset(&to_checkout, git2::ResetType::Hard, None)?;
-    Ok(source_path)
+    Ok(())
 }
 
 fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
@@ -316,6 +318,11 @@ fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
     let mut repos = csv::Reader::from_path(&latest_dump)?
         .into_deserialize()
         .collect::<Result<Vec<GitHubRepo>, _>>()?;
+
+    // Filter down the results
+    let now = SystemTime::now();
+    let max_age: Duration = args.max_age.into();
+    repos.retain(|row| row.pushed_at > now - max_age);
     repos.sort_by_key(|repo| Reverse(repo.stargazers_count));
     repos.truncate(args.github_count);
 
@@ -323,35 +330,48 @@ fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
     let bar = ProgressBar::new(repos.len() as u64);
 
     for repo in repos {
-        let name = &repo.name;
-        let full_name = &repo.full_name;
-        let Some(sha) = &repo.head else {
-            eprintln!("Repo {full_name} is missing HEAD");
-            continue;
-        };
+        'this_repo: {
+            let name = &repo.name;
+            let full_name = &repo.full_name;
+            let Some(sha) = &repo.head else {
+                eprintln!("repo {full_name} is missing HEAD");
+                break 'this_repo
+            };
 
-        let res = if args.clone_repos {
-            clone_github_repo(
-                &source_dir,
-                name,
-                full_name,
-                &repo.default_branch,
-                sha,
-                repo.should_exclude(),
-            )
-        } else {
-            download_github_repo(
-                &source_dir,
-                name,
-                full_name,
-                &repo.default_branch,
-                sha,
-                repo.should_exclude(),
-            )
-        };
-        if let Err(err) = res {
-            eprintln!("Could not download {full_name}: {err:?}");
+            let source_path = if args.clone_repos {
+                source_dir.join(&format!("{name}-git"))
+            } else {
+                source_dir.join(&format!("{name}-{sha}"))
+            };
+
+            if repo.should_exclude() {
+                if source_path.exists() {
+                    fs::remove_dir_all(&source_path)?;
+                }
+                break 'this_repo;
+            }
+
+            let res = if args.clone_repos {
+                clone_github_repo(&source_path, full_name, &repo.default_branch, sha)
+            } else {
+                download_github_repo(&source_path, full_name, &repo.default_branch, sha)
+            };
+
+            if !source_path.exists() {
+                bail!(
+                    "did not download {full_name} into the expected directory: {}",
+                    source_path.display()
+                );
+            }
+
+            if let Err(err) = res {
+                eprintln!("could not download {full_name}: {err:?}");
+                fs::remove_dir_all(&source_path)?;
+                break 'this_repo;
+            }
         }
+
+        thread::sleep(args.sleep.into());
         bar.inc(1);
     }
 
