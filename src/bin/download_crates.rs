@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, Error};
 use clap::Parser;
 use flate2::read::GzDecoder;
 use git2::Repository;
+use humantime::format_rfc3339_seconds;
 use indicatif::ProgressBar;
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -198,19 +199,13 @@ impl GitHubRepo {
     }
 }
 
-fn search_github(
-    &Args {
-        ref github_token,
-        github_db_pages: pages,
-        github_db_per_page: per_page,
-        ..
-    }: &Args,
-    output: &Path,
-) -> Result<(), Error> {
-    let github_token = match github_token {
+fn search_github(args: &Args, output: &Path) -> Result<(), Error> {
+    let github_token = match &args.github_token {
         Some(t) => t,
         None => bail!("must provide github API token"),
     };
+    let pages = args.github_db_pages;
+    let per_page = args.github_db_per_page;
 
     let mut writer = csv::Writer::from_path(output)?;
 
@@ -252,6 +247,7 @@ fn search_github(
             }
             writer.serialize(&repo)?;
             bar.inc(1);
+            thread::sleep(args.sleep.into());
         }
     }
 
@@ -263,12 +259,14 @@ fn download_github_repo(
     full_name: &str,
     _branch: &str,
     sha: &str,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let url = format!("https://github.com/{full_name}/archive/{sha}.tar.gz");
-    if !source_path.exists() {
+    if source_path.exists() {
+        Ok(false)
+    } else {
         unpack_tar_gz(&url, &source_path.parent().unwrap())?;
+        Ok(true)
     }
-    Ok(())
 }
 
 fn clone_github_repo(
@@ -276,11 +274,12 @@ fn clone_github_repo(
     full_name: &str,
     branch: &str,
     sha: &str,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let url = format!("https://github.com/{full_name}.git");
     let shaid: git2::Oid = sha.parse()?;
     let shaty = Some(git2::ObjectType::Commit);
     let repo;
+    let mut updated = false;
     let mut remote;
     let to_checkout = 'fetch_repo: {
         if source_path.exists() {
@@ -295,17 +294,11 @@ fn clone_github_repo(
             remote = repo.remote("origin", &url)?;
         }
         remote.fetch(&[branch], None, None)?;
-        match repo.find_object(shaid, shaty) {
-            Ok(o) => o,
-            Err(_) => {
-                // try to recover by fetching the specific sha
-                remote.fetch(&[sha], None, None)?;
-                repo.find_object(shaid, shaty)?
-            }
-        }
+        updated = true;
+        repo.find_object(shaid, shaty)?
     };
     repo.reset(&to_checkout, git2::ResetType::Hard, None)?;
-    Ok(())
+    Ok(updated)
 }
 
 fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
@@ -327,31 +320,46 @@ fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
     repos.truncate(args.github_count);
 
     let source_dir = output.join("source");
+    let old_source_dir = output.join(format!("source_{}", format_rfc3339_seconds(now.into())));
+    fs::rename(&source_dir, &old_source_dir)?;
+    fs::create_dir(&source_dir)?;
     let bar = ProgressBar::new(repos.len() as u64);
+    let mut res = Ok(false);
 
     for repo in repos {
         'this_repo: {
             let name = &repo.name;
             let full_name = &repo.full_name;
+            let full_name_dash = full_name.replace('/', "-");
             let Some(sha) = &repo.head else {
                 eprintln!("repo {full_name} is missing HEAD");
                 break 'this_repo
             };
 
-            let source_path = if args.clone_repos {
-                source_dir.join(&format!("{name}-git"))
+            let source_name = if args.clone_repos {
+                format!("{full_name_dash}-git")
             } else {
-                source_dir.join(&format!("{name}-{sha}"))
+                format!("{name}-{sha}")
             };
+            let source_path = source_dir.join(&source_name);
+
+            if !source_path.exists() {
+                let alt_path = old_source_dir.join(&source_name);
+                if alt_path.exists() {
+                    fs::rename(&alt_path, &source_path)?;
+                } else if args.clone_repos {
+                    let alt_path = old_source_dir.join(&format!("{name}-git"));
+                    if alt_path.exists() {
+                        fs::rename(&alt_path, &source_path)?;
+                    }
+                }
+            }
 
             if repo.should_exclude() {
-                if source_path.exists() {
-                    fs::remove_dir_all(&source_path)?;
-                }
                 break 'this_repo;
             }
 
-            let res = if args.clone_repos {
+            res = if args.clone_repos {
                 clone_github_repo(&source_path, full_name, &repo.default_branch, sha)
             } else {
                 download_github_repo(&source_path, full_name, &repo.default_branch, sha)
@@ -364,14 +372,16 @@ fn download_github(args: &Args, output: &Path) -> Result<(), Error> {
                 );
             }
 
-            if let Err(err) = res {
+            if let Err(err) = &res {
                 eprintln!("could not download {full_name}: {err:?}");
                 fs::remove_dir_all(&source_path)?;
                 break 'this_repo;
             }
         }
 
-        thread::sleep(args.sleep.into());
+        if matches!(res, Err(_) | Ok(true)) {
+            thread::sleep(args.sleep.into());
+        }
         bar.inc(1);
     }
 

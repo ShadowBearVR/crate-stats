@@ -1,5 +1,5 @@
-use chrono::{DateTime, SecondsFormat, Utc};
 use glob::glob;
+use humantime::format_rfc3339_seconds;
 use syn::spanned::Spanned;
 // use rayon::{prelude::*};
 use std::fs;
@@ -414,8 +414,7 @@ fn main() {
     };
 
     let now = SystemTime::now();
-    let now: DateTime<Utc> = now.into();
-    let now_timestamp = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+    let now_timestamp = format_rfc3339_seconds(now.into());
 
     let hostname = hostname::get().unwrap();
     let hostname = hostname.to_str().unwrap();
@@ -424,7 +423,7 @@ fn main() {
 
     let mut output_filename = output.file_stem().unwrap().to_os_string();
     output_filename.push("_");
-    output_filename.push(now_timestamp);
+    output_filename.push(now_timestamp.to_string());
     output_filename.push("_");
     output_filename.push(hostname);
     output_filename.push(".csv");
