@@ -1,5 +1,7 @@
 use glob::glob;
 use humantime::format_rfc3339_seconds;
+use ignore::WalkBuilder;
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use syn::spanned::Spanned;
 // use rayon::{prelude::*};
 use std::fs;
@@ -364,10 +366,23 @@ fn test_where_clause() {
 struct Args {
     /// Directory or file to parse
     #[arg(short, long, default_value = "./download/source")]
-    source: String,
+    source: PathBuf,
     /// CSV file to write output
     #[arg(short, long, default_value = "./output/syntax.csv")]
     output: PathBuf,
+
+    #[arg(long, default_value_t = "default_postfix()")]
+    postfix: String,
+}
+
+fn default_postfix() -> String {
+    let now = SystemTime::now();
+    let now_timestamp = format_rfc3339_seconds(now.into());
+
+    let hostname = hostname::get().unwrap();
+    let hostname = hostname.to_str().unwrap().split(".").next().unwrap_or("");
+
+    format!("{now_timestamp}_{hostname}")
 }
 
 fn run(mut stats: Stats<impl Rows>, source_path: &Path, source: &str) {
@@ -403,15 +418,86 @@ fn run(mut stats: Stats<impl Rows>, source_path: &Path, source: &str) {
     }
 }
 
-fn main() {
-    let Args { source, output } = clap::Parser::parse();
-    let source_path = Path::new(&source).canonicalize().unwrap();
-    match output.parent() {
-        Some(dir) => {
-            fs::create_dir_all(dir).unwrap();
-        }
-        None => {}
+fn run_sources(source_path: &Path, args: &Args) {
+    let source_paths: Vec<_> = fs::read_dir(source_path)
+        .unwrap()
+        .map(|d| d.unwrap())
+        .filter(|d| d.file_type().unwrap().is_dir())
+        .map(|d| d.path())
+        .collect();
+
+    source_paths.par_iter().for_each(|d| run_versions(d))
+}
+
+fn find_rust_files(path: &Path) -> impl Iterator<Item = PathBuf> {
+    let mut builder = ignore::types::TypesBuilder::new();
+    builder.add_defaults();
+    builder.select("rust");
+    let matcher = builder.build().unwrap();
+
+    WalkBuilder::new(path)
+        .types(matcher)
+        .build()
+        .map(|f| f.unwrap().into_path())
+}
+
+fn run_versions(source_path: &Path, args: &Args) {
+    let now = SystemTime::now();
+    let now_timestamp = format_rfc3339_seconds(now.into());
+
+    let hostname = hostname::get().unwrap();
+    let hostname = hostname.to_str().unwrap();
+    let hostname = hostname.to_string();
+    let hostname = hostname.split(".").next().unwrap_or("");
+
+    let mut output_filename = output.file_stem().unwrap().to_os_string();
+    output_filename.push("_");
+    output_filename.push(now_timestamp.to_string());
+    output_filename.push("_");
+    output_filename.push(hostname);
+    output_filename.push(".csv");
+
+    let mut output = output.clone();
+    output.set_file_name(output_filename);
+
+    let output = csv::Writer::from_path(output).unwrap();
+    let stats = Stats {
+        rows: output,
+        crate_name: "".to_string(),
+        file_name: "".to_string(),
     };
+
+    for path in find_rust_files(source_path) {
+        let path = path.canonicalize().unwrap();
+        let mut components = path.strip_prefix(&source_path).unwrap().components();
+        let crate_name = components.next().unwrap();
+        let file_name = path.strip_prefix(&source_path.join(crate_name)).unwrap();
+        if components.any(|s| {
+            let s = s.as_os_str().to_str().unwrap();
+            let s = s.trim_end_matches(".rs");
+            s == "test" || s == "tests" || s == "test_data"
+        }) {
+            // Don't include test files
+            continue;
+        }
+        stats.crate_name = crate_name.as_os_str().to_str().unwrap().to_string();
+        stats.file_name = file_name.display().to_string();
+        if let Err(err) = stats.collect(&path) {
+            eprintln!(
+                "Error parsing {}:{}: {}",
+                path.display(),
+                err.span().start().line,
+                err
+            );
+        } else {
+            // eprintln!("Parsing {}", path.display());
+        }
+    }
+}
+
+fn main() {
+    let mut args: Args = clap::Parser::parse();
+    args.source = args.source.canonicalize().unwrap();
 
     let now = SystemTime::now();
     let now_timestamp = format_rfc3339_seconds(now.into());

@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.12
+# v0.19.14
 
 using Markdown
 using InteractiveUtils
@@ -137,7 +137,7 @@ function mean_proportions_table(data, by, of; range=(:))
 	)[range, :]
 	text = "| $(by) | $(of) proportion |\n| --- | --- |"
 	for (name, proportion) in table 
-		text *= "\n| $(name) | $(fmt_percent(proportion))% |"
+		text *= "\n| $(name) | $(fmt_percent(proportion)) |"
 	end
 	Markdown.parse(text)
 end
@@ -241,6 +241,18 @@ ats_ratios, ats_totals = syntax_counts_and_ratios(data_ats);
 
 # ╔═╡ 81b31100-07ab-4875-9a1b-ab9fbbbfafae
 histogram(the_ratios, bins=0.0:0.05:1.0, legend=:none, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of $(crates_desc) by Trait Syntax", fillcolor="#f74c00",  fillalpha=0.5)
+
+# ╔═╡ 43e26ef1-2821-4740-9de1-907fac0c2c7e
+the_ratios_cdf = ecdf(filter(isfinite, the_ratios));
+
+# ╔═╡ d9965a1e-c57a-4e38-8e69-7e773a81fa5b
+all_ratios_cdf = ecdf(filter(isfinite, all_ratios));
+
+# ╔═╡ f6f7392a-8cf5-4ba9-8e49-352536329f9c
+ats_ratios_cdf = ecdf(filter(isfinite, ats_ratios));
+
+# ╔═╡ a0e7e0c9-826b-4f47-b496-1c7781e63876
+plot([x -> all_ratios_cdf(x) x -> ats_ratios_cdf(x)], 0.0, 1.0, legend=:bottomright, xaxis="Proportion of bounds and impl/dyn types", title="CDF of $(crates_desc) by Trait Syntax", color=["#f74c00" "#01346b"], labels=["All Traits" "With Associated Types Only"])
 
 # ╔═╡ c7b64e8c-b5f4-4dde-9ca2-1c67e7b4a721
 histogram([all_ratios ats_ratios], bins=0.0:0.05:1.0, xaxis="Proportion of bounds and impl/dyn types", title="Histogram of $(crates_desc) by Trait Syntax", fillalpha=0.5, fillcolor=["#f74c00" "#01346b"], labels=["All Traits" "With Associated Types Only"])
@@ -352,7 +364,7 @@ StatsBase = "~0.33.21"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.8.0"
+julia_version = "1.8.2"
 manifest_format = "2.0"
 project_hash = "cc6c5b0a884f8e1802a8c35766c1f816b9aee2ef"
 
@@ -1130,7 +1142,7 @@ version = "1.10.0"
 [[deps.Tar]]
 deps = ["ArgTools", "SHA"]
 uuid = "a4e569a6-e804-4fa4-b0f3-eef7a1d5b13e"
-version = "1.10.0"
+version = "1.10.1"
 
 [[deps.TensorCore]]
 deps = ["LinearAlgebra"]
@@ -1458,6 +1470,10 @@ version = "1.4.1+0"
 # ╠═7f82c555-1a9b-400a-814c-7eb1215556a8
 # ╠═a5723518-6e82-4233-86d1-001ed5cbebb4
 # ╠═81b31100-07ab-4875-9a1b-ab9fbbbfafae
+# ╠═43e26ef1-2821-4740-9de1-907fac0c2c7e
+# ╠═d9965a1e-c57a-4e38-8e69-7e773a81fa5b
+# ╠═f6f7392a-8cf5-4ba9-8e49-352536329f9c
+# ╠═a0e7e0c9-826b-4f47-b496-1c7781e63876
 # ╠═c7b64e8c-b5f4-4dde-9ca2-1c67e7b4a721
 # ╠═1df1fd4c-b49d-40b5-85f7-4469b88ca322
 # ╠═131408f4-de47-46c7-be4f-6f5f40443d61
