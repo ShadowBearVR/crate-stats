@@ -1,4 +1,3 @@
-use glob::glob;
 use humantime::format_rfc3339_seconds;
 use ignore::WalkBuilder;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
@@ -8,7 +7,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::SystemTime;
 use syn::visit::{self, Visit};
 
@@ -371,7 +369,7 @@ struct Args {
     #[arg(short, long, default_value = "./output/syntax.csv")]
     output: PathBuf,
 
-    #[arg(long, default_value_t = "default_postfix()")]
+    #[arg(long, default_value_t = default_postfix())]
     postfix: String,
 }
 
@@ -385,39 +383,6 @@ fn default_postfix() -> String {
     format!("{now_timestamp}_{hostname}")
 }
 
-fn run(mut stats: Stats<impl Rows>, source_path: &Path, source: &str) {
-    if Path::new(&source).is_file() {
-        stats.collect(&source).unwrap();
-    } else {
-        for path in glob(&format!("{source}/**/*.rs")).unwrap() {
-            let path = path.unwrap().canonicalize().unwrap();
-            let mut components = path.strip_prefix(&source_path).unwrap().components();
-            let crate_name = components.next().unwrap();
-            let file_name = path.strip_prefix(&source_path.join(crate_name)).unwrap();
-            if components.any(|s| {
-                let s = s.as_os_str().to_str().unwrap();
-                let s = s.trim_end_matches(".rs");
-                s == "test" || s == "tests" || s == "test_data"
-            }) {
-                // Don't include test files
-                continue;
-            }
-            stats.crate_name = crate_name.as_os_str().to_str().unwrap().to_string();
-            stats.file_name = file_name.display().to_string();
-            if let Err(err) = stats.collect(&path) {
-                eprintln!(
-                    "Error parsing {}:{}: {}",
-                    path.display(),
-                    err.span().start().line,
-                    err
-                );
-            } else {
-                // eprintln!("Parsing {}", path.display());
-            }
-        }
-    }
-}
-
 fn run_sources(source_path: &Path, args: &Args) {
     let source_paths: Vec<_> = fs::read_dir(source_path)
         .unwrap()
@@ -426,7 +391,7 @@ fn run_sources(source_path: &Path, args: &Args) {
         .map(|d| d.path())
         .collect();
 
-    source_paths.par_iter().for_each(|d| run_versions(d))
+    source_paths.par_iter().for_each(|d| run_versions(d, args))
 }
 
 fn find_rust_files(path: &Path) -> impl Iterator<Item = PathBuf> {
@@ -434,34 +399,39 @@ fn find_rust_files(path: &Path) -> impl Iterator<Item = PathBuf> {
     builder.add_defaults();
     builder.select("rust");
     let matcher = builder.build().unwrap();
-
     WalkBuilder::new(path)
         .types(matcher)
         .build()
-        .map(|f| f.unwrap().into_path())
+        .map(|f| f.unwrap())
+        .filter(|d| d.file_type().unwrap().is_file())
+        .map(|d| d.into_path())
 }
 
 fn run_versions(source_path: &Path, args: &Args) {
-    let now = SystemTime::now();
-    let now_timestamp = format_rfc3339_seconds(now.into());
+    let crate_name = source_path
+        .components()
+        .last()
+        .unwrap()
+        .as_os_str()
+        .to_string_lossy();
 
-    let hostname = hostname::get().unwrap();
-    let hostname = hostname.to_str().unwrap();
-    let hostname = hostname.to_string();
-    let hostname = hostname.split(".").next().unwrap_or("");
-
-    let mut output_filename = output.file_stem().unwrap().to_os_string();
-    output_filename.push("_");
-    output_filename.push(now_timestamp.to_string());
-    output_filename.push("_");
-    output_filename.push(hostname);
-    output_filename.push(".csv");
-
-    let mut output = output.clone();
-    output.set_file_name(output_filename);
+    let mut output = args.output.to_path_buf();
+    let output_name = output
+        .file_name()
+        .expect("output must have a file name")
+        .to_string_lossy();
+    let mut output_name: Vec<_> = output_name.split('.').collect();
+    if output_name.len() == 1 {
+        output_name.push("csv");
+    }
+    output_name.insert(output_name.len() - 1, &crate_name);
+    if !args.postfix.is_empty() {
+        output_name.insert(output_name.len() - 1, &args.postfix);
+    }
+    output.set_file_name(output_name.join("."));
 
     let output = csv::Writer::from_path(output).unwrap();
-    let stats = Stats {
+    let mut stats = Stats {
         rows: output,
         crate_name: "".to_string(),
         file_name: "".to_string(),
@@ -469,10 +439,8 @@ fn run_versions(source_path: &Path, args: &Args) {
 
     for path in find_rust_files(source_path) {
         let path = path.canonicalize().unwrap();
-        let mut components = path.strip_prefix(&source_path).unwrap().components();
-        let crate_name = components.next().unwrap();
-        let file_name = path.strip_prefix(&source_path.join(crate_name)).unwrap();
-        if components.any(|s| {
+        let rel_path = path.strip_prefix(&source_path).unwrap();
+        if rel_path.components().any(|s| {
             let s = s.as_os_str().to_str().unwrap();
             let s = s.trim_end_matches(".rs");
             s == "test" || s == "tests" || s == "test_data"
@@ -480,8 +448,8 @@ fn run_versions(source_path: &Path, args: &Args) {
             // Don't include test files
             continue;
         }
-        stats.crate_name = crate_name.as_os_str().to_str().unwrap().to_string();
-        stats.file_name = file_name.display().to_string();
+        stats.crate_name = crate_name.to_string();
+        stats.file_name = rel_path.display().to_string();
         if let Err(err) = stats.collect(&path) {
             eprintln!(
                 "Error parsing {}:{}: {}",
@@ -496,40 +464,10 @@ fn run_versions(source_path: &Path, args: &Args) {
 }
 
 fn main() {
-    let mut args: Args = clap::Parser::parse();
-    args.source = args.source.canonicalize().unwrap();
-
-    let now = SystemTime::now();
-    let now_timestamp = format_rfc3339_seconds(now.into());
-
-    let hostname = hostname::get().unwrap();
-    let hostname = hostname.to_str().unwrap();
-    let hostname = hostname.to_string();
-    let hostname = hostname.split(".").next().unwrap_or("");
-
-    let mut output_filename = output.file_stem().unwrap().to_os_string();
-    output_filename.push("_");
-    output_filename.push(now_timestamp.to_string());
-    output_filename.push("_");
-    output_filename.push(hostname);
-    output_filename.push(".csv");
-
-    let mut output = output.clone();
-    output.set_file_name(output_filename);
-
-    let output = csv::Writer::from_path(output).unwrap();
-    let stats = Stats {
-        rows: output,
-        crate_name: "".to_string(),
-        file_name: "".to_string(),
-    };
-
-    thread::Builder::new()
-        .stack_size(16 * 1024 * 1026)
-        .spawn(move || {
-            run(stats, &source_path, &source);
-        })
-        .unwrap()
-        .join()
-        .unwrap()
+    let args: Args = clap::Parser::parse();
+    rayon::ThreadPoolBuilder::new()
+        .stack_size(16 * 1024 * 1024)
+        .build_global()
+        .unwrap();
+    run_sources(&args.source.canonicalize().unwrap(), &args);
 }
