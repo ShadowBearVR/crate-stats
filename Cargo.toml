@@ -23,6 +23,7 @@ indicatif = "^0.17"
 git2 = { version = "0.15", default-features = false }
 rayon = "^1.5"
 ignore = "^0.4"
+chrono = "^0.4"
 
 [profile.dev]
 opt-level = 2

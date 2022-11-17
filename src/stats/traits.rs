@@ -30,6 +30,7 @@ pub struct Row {
     trait_name: String,
     crate_name: String,
     location: String,
+    date: String,
 }
 
 #[derive(Default, Debug)]
@@ -105,6 +106,7 @@ pub struct Stats<R: Rows> {
     rows: R,
     crate_name: String,
     file_name: String,
+    date_str: String,
 }
 
 impl<R: Rows> Stats<R> {
@@ -113,12 +115,19 @@ impl<R: Rows> Stats<R> {
             rows,
             crate_name: "".to_string(),
             file_name: "".to_string(),
+            date_str: "".to_string(),
         }
     }
 
-    pub fn set_location(&mut self, crate_name: impl Display, file_name: impl Display) {
+    pub fn set_location(
+        &mut self,
+        crate_name: impl Display,
+        file_name: impl Display,
+        date_str: impl Display,
+    ) {
         self.crate_name = crate_name.to_string();
         self.file_name = file_name.to_string();
+        self.date_str = date_str.to_string();
     }
 }
 
@@ -186,6 +195,7 @@ impl<R: Rows> Visit<'_> for Stats<R> {
             trait_name: node.ident.to_string(),
             crate_name: self.crate_name.clone(),
             location: format!("{}:{}", &self.file_name, node.ident.span().start().line),
+            date: self.date_str.clone(),
         });
     }
 }
@@ -234,6 +244,7 @@ impl<R: Rows> Stats<R> {
             trait_name,
             crate_name: self.crate_name.clone(),
             location: format!("{}:{}", &self.file_name, path.span().start().line),
+            date: self.date_str.clone(),
         });
     }
 
@@ -258,6 +269,7 @@ fn collect_mock(name: &str) -> Vec<Row> {
         rows: Vec::<Row>::new(),
         crate_name: name.to_string(),
         file_name: file_name.clone(),
+        date_str: "".to_string(),
     };
     stats.collect(&file_name).unwrap();
     return stats.rows;
@@ -275,6 +287,7 @@ fn test_impl_for() {
             trait_name: "Iterator".to_string(),
             crate_name: "impl_for".to_string(),
             location: "./mocks/impl_for.rs:3".to_string(),
+            date: "".to_string(),
         }]
     )
 }
@@ -291,6 +304,7 @@ fn test_iterator_arg() {
             trait_name: "Iterator".to_string(),
             crate_name: "iterator_arg".to_string(),
             location: "./mocks/iterator_arg.rs:1".to_string(),
+            date: "".to_string(),
         }]
     )
 }
@@ -307,6 +321,7 @@ fn test_iterator_ret() {
             trait_name: "Iterator".to_string(),
             crate_name: "iterator_ret".to_string(),
             location: "./mocks/iterator_ret.rs:1".to_string(),
+            date: "".to_string(),
         }]
     )
 }
@@ -323,6 +338,7 @@ fn test_dyn_iterator_arg() {
             trait_name: "Iterator".to_string(),
             crate_name: "dyn_iterator_arg".to_string(),
             location: "./mocks/dyn_iterator_arg.rs:1".to_string(),
+            date: "".to_string(),
         }]
     )
 }
@@ -340,6 +356,7 @@ fn test_many_generics() {
                 trait_name: "Mock".to_string(),
                 crate_name: "many_generics".to_string(),
                 location: "./mocks/many_generics.rs:1".to_string(),
+                date: "".to_string(),
             },
             Row {
                 syntax: SyntaxType::TypeImpl,
@@ -349,6 +366,7 @@ fn test_many_generics() {
                 trait_name: "Mock".to_string(),
                 crate_name: "many_generics".to_string(),
                 location: "./mocks/many_generics.rs:5".to_string(),
+                date: "".to_string(),
             }
         ]
     )
@@ -366,6 +384,7 @@ fn test_where_clause() {
             trait_name: "Iterator".to_string(),
             crate_name: "where_clause".to_string(),
             location: "./mocks/where_clause.rs:3".to_string(),
+            date: "".to_string(),
         }]
     )
 }
