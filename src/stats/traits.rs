@@ -1,36 +1,38 @@
-use std::fmt::Display;
-use std::fs;
-use std::io::Write;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use syn::spanned::Spanned;
+use crate::sql_enum;
+use rusqlite::Connection;
+use std::{fmt::Display, rc::Rc};
 use syn::visit::{self, Visit};
+use tracing::trace;
 
-#[derive(Debug, serde::Serialize, PartialEq, Eq)]
-enum SyntaxType {
-    TraitDef,
-    ImplFor,
-    TypeImpl,
-    TypeDyn,
-    WhereClause,
+#[cfg(test)]
+use super::DynStats as _;
+#[cfg(test)]
+use tracing_test::traced_test;
+
+sql_enum! {
+    enum SyntaxType {
+        TraitDef,
+        ImplFor,
+        TypeImpl,
+        TypeDyn,
+        WhereClause,
+    }
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq)]
-enum Position {
-    Argument,
-    Return,
+sql_enum! {
+    enum Position {
+        Argument,
+        Return,
+    }
 }
 
-#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Row {
     syntax: SyntaxType,
     position: Option<Position>,
     generic_count: usize,
     at_count: usize,
     trait_name: String,
-    crate_name: String,
-    location: String,
-    date: String,
 }
 
 #[derive(Default, Debug)]
@@ -59,12 +61,12 @@ impl Visit<'_> for TraitParamCounter {
     }
 }
 
-struct PositionalStats<'stats, R: Rows> {
-    stats: &'stats mut Stats<R>,
+struct PositionalStats<'stats> {
+    stats: &'stats mut Stats,
     position: Position,
 }
 
-impl<R: Rows> Visit<'_> for PositionalStats<'_, R> {
+impl Visit<'_> for PositionalStats<'_> {
     fn visit_type_impl_trait(&mut self, node: &syn::TypeImplTrait) {
         for bound in &node.bounds {
             self.stats
@@ -80,46 +82,48 @@ impl<R: Rows> Visit<'_> for PositionalStats<'_, R> {
     }
 }
 
-pub trait Rows {
-    fn push(&mut self, row: Row);
-}
-
-impl<W: Write> Rows for csv::Writer<W> {
-    fn push(&mut self, row: Row) {
-        self.serialize(row).unwrap();
-    }
-}
-
-impl Rows for Vec<Row> {
-    fn push(&mut self, row: Row) {
-        Vec::push(self, row);
-    }
-}
-
-impl<R: Rows> Rows for Arc<Mutex<R>> {
-    fn push(&mut self, row: Row) {
-        self.lock().unwrap().push(row);
-    }
-}
-
-pub struct Stats<R: Rows> {
-    rows: R,
+pub struct Stats {
+    db: Rc<Connection>,
     crate_name: String,
     file_name: String,
     date_str: String,
 }
 
-impl<R: Rows> Stats<R> {
-    pub fn new(rows: R) -> Self {
+impl Stats {
+    pub fn push(&self, row: Row) {
+        trace!(row = ?row);
+        self.db
+            .execute(
+                "INSERT INTO traits
+                (syntax, position, at_count, generic_count, trait_name, crate_name, file_name, data_str)
+                VALUES
+                (?,      ?,        ?,        ?,             ?,          ?,          ?,         ?)",
+                (
+                    row.syntax,
+                    row.position,
+                    row.at_count,
+                    row.generic_count,
+                    row.trait_name,
+                    &self.crate_name,
+                    &self.file_name,
+                    &self.date_str,
+                ),
+            )
+            .unwrap();
+    }
+}
+
+impl super::Stats for Stats {
+    fn new(db: Rc<Connection>) -> Self {
         Stats {
-            rows,
+            db,
             crate_name: "".to_string(),
             file_name: "".to_string(),
             date_str: "".to_string(),
         }
     }
 
-    pub fn set_location(
+    fn set_location(
         &mut self,
         crate_name: impl Display,
         file_name: impl Display,
@@ -129,9 +133,26 @@ impl<R: Rows> Stats<R> {
         self.file_name = file_name.to_string();
         self.date_str = date_str.to_string();
     }
+
+    fn init(&self) {
+        self.db
+            .execute_batch(
+                "CREATE TABLE traits (
+                    syntax TEXT,
+                    position TEXT,
+                    at_count INT,
+                    generic_count INT,
+                    trait_name TEXT,
+                    crate_name TEXT,
+                    file_name TEXT,
+                    data_str TEXT
+                )",
+            )
+            .unwrap();
+    }
 }
 
-impl<R: Rows> Visit<'_> for Stats<R> {
+impl Visit<'_> for Stats {
     fn visit_fn_arg(&mut self, node: &syn::FnArg) {
         visit::visit_fn_arg(
             &mut PositionalStats {
@@ -187,20 +208,17 @@ impl<R: Rows> Visit<'_> for Stats<R> {
             .filter(|i| matches!(i, syn::GenericParam::Type(_)))
             .count();
 
-        self.rows.push(Row {
+        self.push(Row {
             syntax: SyntaxType::TraitDef,
             position: None,
             generic_count,
             at_count,
             trait_name: node.ident.to_string(),
-            crate_name: self.crate_name.clone(),
-            location: format!("{}:{}", &self.file_name, node.ident.span().start().line),
-            date: self.date_str.clone(),
         });
     }
 }
 
-impl<R: Rows> Stats<R> {
+impl Stats {
     fn collect_type_param_bound(
         &mut self,
         bound: &syn::TypeParamBound,
@@ -236,155 +254,86 @@ impl<R: Rows> Stats<R> {
 
         visit::visit_path(&mut counter, path);
 
-        self.rows.push(Row {
+        self.push(Row {
             syntax,
             position,
             generic_count: counter.generic_count,
             at_count: counter.at_count + base_at_count,
             trait_name,
-            crate_name: self.crate_name.clone(),
-            location: format!("{}:{}", &self.file_name, path.span().start().line),
-            date: self.date_str.clone(),
         });
-    }
-
-    pub fn collect(&mut self, path: impl AsRef<Path>) -> Result<(), syn::Error> {
-        match fs::read_to_string(path.as_ref()) {
-            Ok(source) => {
-                let file = syn::parse_file(&source)?;
-                visit::visit_file(self, &file);
-            }
-            Err(err) => {
-                eprintln!("Error reading {}: {}", path.as_ref().display(), err);
-            }
-        }
-        Ok(())
     }
 }
 
 #[cfg(test)]
-fn collect_mock(name: &str) -> Vec<Row> {
+fn collect_mock(name: &str) {
     let file_name = format!("./mocks/{name}.rs");
     let mut stats = Stats {
-        rows: Vec::<Row>::new(),
+        db: Rc::new(Connection::open_in_memory().unwrap()),
         crate_name: name.to_string(),
         file_name: file_name.clone(),
         date_str: "".to_string(),
     };
-    stats.collect(&file_name).unwrap();
-    return stats.rows;
+    stats.init();
+    stats.collect(file_name.as_ref()).unwrap();
 }
 
 #[test]
+#[traced_test]
 fn test_impl_for() {
-    assert_eq!(
-        collect_mock("impl_for"),
-        vec![Row {
-            syntax: SyntaxType::ImplFor,
-            position: None,
-            generic_count: 0,
-            at_count: 1,
-            trait_name: "Iterator".to_string(),
-            crate_name: "impl_for".to_string(),
-            location: "./mocks/impl_for.rs:3".to_string(),
-            date: "".to_string(),
-        }]
-    )
+    collect_mock("impl_for");
+    vec![Row {
+        syntax: SyntaxType::ImplFor,
+        position: None,
+        generic_count: 0,
+        at_count: 1,
+        trait_name: "Iterator".to_string(),
+    }];
 }
 
 #[test]
+#[traced_test]
 fn test_iterator_arg() {
-    assert_eq!(
-        collect_mock("iterator_arg"),
-        vec![Row {
-            syntax: SyntaxType::TypeImpl,
-            position: Some(Position::Argument),
-            generic_count: 0,
-            at_count: 1,
-            trait_name: "Iterator".to_string(),
-            crate_name: "iterator_arg".to_string(),
-            location: "./mocks/iterator_arg.rs:1".to_string(),
-            date: "".to_string(),
-        }]
-    )
+    collect_mock("iterator_arg");
+    assert!(logs_contain(
+        r#"row=Row { syntax: TypeImpl, position: Some(Argument), generic_count: 0, at_count: 1, trait_name: "Iterator" }"#,
+    ));
 }
 
 #[test]
+#[traced_test]
 fn test_iterator_ret() {
-    assert_eq!(
-        collect_mock("iterator_ret"),
-        vec![Row {
-            syntax: SyntaxType::TypeImpl,
-            position: Some(Position::Return),
-            generic_count: 0,
-            at_count: 1,
-            trait_name: "Iterator".to_string(),
-            crate_name: "iterator_ret".to_string(),
-            location: "./mocks/iterator_ret.rs:1".to_string(),
-            date: "".to_string(),
-        }]
-    )
+    collect_mock("iterator_ret");
+    assert!(logs_contain(
+        r#"row=Row { syntax: TypeImpl, position: Some(Return), generic_count: 0, at_count: 1, trait_name: "Iterator" }"#,
+    ));
 }
 
 #[test]
+#[traced_test]
 fn test_dyn_iterator_arg() {
-    assert_eq!(
-        collect_mock("dyn_iterator_arg"),
-        vec![Row {
-            syntax: SyntaxType::TypeDyn,
-            position: Some(Position::Argument),
-            generic_count: 0,
-            at_count: 1,
-            trait_name: "Iterator".to_string(),
-            crate_name: "dyn_iterator_arg".to_string(),
-            location: "./mocks/dyn_iterator_arg.rs:1".to_string(),
-            date: "".to_string(),
-        }]
-    )
+    collect_mock("dyn_iterator_arg");
+    assert!(logs_contain(
+        r#"row=Row { syntax: TypeDyn, position: Some(Argument), generic_count: 0, at_count: 1, trait_name: "Iterator" }"#,
+    ));
 }
 
 #[test]
+#[traced_test]
 fn test_many_generics() {
-    assert_eq!(
-        collect_mock("many_generics"),
-        vec![
-            Row {
-                syntax: SyntaxType::TraitDef,
-                position: None,
-                generic_count: 3,
-                at_count: 1,
-                trait_name: "Mock".to_string(),
-                crate_name: "many_generics".to_string(),
-                location: "./mocks/many_generics.rs:1".to_string(),
-                date: "".to_string(),
-            },
-            Row {
-                syntax: SyntaxType::TypeImpl,
-                position: Some(Position::Argument),
-                generic_count: 3,
-                at_count: 0,
-                trait_name: "Mock".to_string(),
-                crate_name: "many_generics".to_string(),
-                location: "./mocks/many_generics.rs:5".to_string(),
-                date: "".to_string(),
-            }
-        ]
-    )
+    collect_mock("many_generics");
+    assert!(logs_contain(
+        r#"row=Row { syntax: TraitDef, position: None, generic_count: 3, at_count: 1, trait_name: "Mock" }"#,
+    ));
+    assert!(logs_contain(
+        r#"row=Row { syntax: TypeImpl, position: Some(Argument), generic_count: 3, at_count: 0, trait_name: "Mock" }"#,
+    ));
 }
 
 #[test]
+#[traced_test]
 fn test_where_clause() {
-    assert_eq!(
-        collect_mock("where_clause"),
-        vec![Row {
-            syntax: SyntaxType::WhereClause,
-            position: None,
-            generic_count: 0,
-            at_count: 1,
-            trait_name: "Iterator".to_string(),
-            crate_name: "where_clause".to_string(),
-            location: "./mocks/where_clause.rs:3".to_string(),
-            date: "".to_string(),
-        }]
-    )
+    collect_mock("where_clause");
+    assert!(logs_contain(
+        r#"row=Row { syntax: WhereClause, position: None, generic_count: 0, at_count: 1, trait_name: "Iterator" }"#,
+    ));
 }

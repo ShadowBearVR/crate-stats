@@ -3,11 +3,14 @@ use git2::Repository;
 use humantime::format_rfc3339_seconds;
 use ignore::WalkBuilder;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
-use stats::traits::{Rows, Stats};
+use rusqlite::Connection;
+use stats::{AnyStats, ALL_STATS};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::SystemTime;
 mod stats;
+mod utils;
 
 #[derive(clap::Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -16,7 +19,7 @@ struct Args {
     #[arg(short, long, default_value = "./download/source")]
     source: PathBuf,
     /// CSV file to write output
-    #[arg(short, long, default_value = "./output/syntax.csv")]
+    #[arg(short, long, default_value = "./output/syntax.sqlite")]
     output: PathBuf,
 
     #[arg(long, default_value_t = default_postfix())]
@@ -99,23 +102,8 @@ fn run_versions(source_path: &Path, args: &Args) {
         .as_os_str()
         .to_string_lossy();
 
-    let mut output = args.output.to_path_buf();
-    let output_name = output
-        .file_name()
-        .expect("output must have a file name")
-        .to_string_lossy();
-    let mut output_name: Vec<_> = output_name.split('.').collect();
-    if output_name.len() == 1 {
-        output_name.push("csv");
-    }
-    output_name.insert(output_name.len() - 1, &crate_name);
-    if !args.postfix.is_empty() {
-        output_name.insert(output_name.len() - 1, &args.postfix);
-    }
-    output.set_file_name(output_name.join("."));
-
-    let output = csv::Writer::from_path(output).unwrap();
-    let mut stats = Stats::new(output);
+    let con = Rc::new(Connection::open(&args.output).unwrap());
+    let mut stats: Vec<_> = ALL_STATS.iter().map(|f| (f)(&con)).collect();
 
     let Ok(repo) = Repository::open(source_path) else {
         eprintln!("{} is not a git repository!", source_path.display());
@@ -156,7 +144,7 @@ fn run_versions(source_path: &Path, args: &Args) {
     }
 }
 
-fn run_version(source_path: &Path, stats: &mut Stats<impl Rows>, crate_name: &str, date_str: &str) {
+fn run_version(source_path: &Path, stats: &mut [AnyStats], crate_name: &str, date_str: &str) {
     for path in find_rust_files(source_path) {
         let path = path.canonicalize().unwrap();
         let rel_path = path.strip_prefix(&source_path).unwrap();
@@ -169,17 +157,33 @@ fn run_version(source_path: &Path, stats: &mut Stats<impl Rows>, crate_name: &st
             continue;
         }
 
-        stats.set_location(&crate_name, rel_path.display(), date_str);
+        let source = match fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(err) => {
+                eprintln!("Error reading {}: {}", path.display(), err);
+                return;
+            }
+        };
+        let file = match syn::parse_file(&source) {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!(
+                    "Error parsing {}:{}: {}",
+                    path.display(),
+                    err.span().start().line,
+                    err
+                );
+                return;
+            }
+        };
 
-        if let Err(err) = stats.collect(&path) {
-            eprintln!(
-                "Error parsing {}:{}: {}",
-                path.display(),
-                err.span().start().line,
-                err
+        for stats in stats.iter_mut() {
+            stats.set_location(
+                crate_name.to_string(),
+                rel_path.display().to_string(),
+                date_str.to_string(),
             );
-        } else {
-            // eprintln!("Parsing {}", path.display());
+            stats.collect_syntax(&file);
         }
     }
 }
@@ -190,5 +194,9 @@ fn main() {
         .stack_size(16 * 1024 * 1024)
         .build_global()
         .unwrap();
+    let con = Rc::new(Connection::open(&args.output).unwrap());
+    for f in ALL_STATS {
+        (f)(&con).init();
+    }
     run_sources(&args.source.canonicalize().unwrap(), &args);
 }
