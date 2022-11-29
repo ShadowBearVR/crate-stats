@@ -25,6 +25,8 @@ rayon = "^1.5"
 ignore = "^0.4"
 chrono = "^0.4"
 rusqlite = { version = "0.28", features = ["bundled"] }
+postgres = "0.19"
+postgres-types = { version = "0.2", features = ["derive"] }
 tracing = "^0.1.37"
 tracing-test = "^0.2.3"
 

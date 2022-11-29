@@ -1,44 +1,48 @@
-use rusqlite::Connection;
+use postgres::{Client, NoTls, Transaction};
 use std::fs;
 use std::path::Path;
 
 pub mod traits;
 
-#[derive(Copy, Clone)]
-pub struct Logger<'a> {
-    pub tx: &'a Connection,
+pub struct Logger<'a, 'db> {
+    pub db: &'a mut Transaction<'db>,
     pub crate_name: &'a str,
     pub file_name: &'a str,
     pub date_str: &'a str,
 }
 
-impl<'a> std::ops::Deref for Logger<'a> {
-    type Target = Connection;
-
-    fn deref(&self) -> &Connection {
-        self.tx
+impl<'a, 'db> Logger<'a, 'db> {
+    pub fn fork<'b>(&'b mut self) -> Logger<'b, 'db> {
+        Logger {
+            db: self.db,
+            crate_name: self.crate_name,
+            file_name: self.file_name,
+            date_str: self.date_str,
+        }
     }
 }
 
 #[derive(Clone, Copy)]
 pub struct Runner {
-    pub init: fn(con: &Connection),
+    pub init: fn(db: &mut Transaction),
     pub collect: fn(file: &syn::File, log: Logger),
 }
 
 impl Runner {
-#[allow(unused)]
+    #[allow(unused)]
     pub fn collect_mock(&self, name: &str) {
-        let con = Connection::open_in_memory().unwrap();
+        let mut cli = Client::connect("crate-stats-test", NoTls).unwrap();
+        let mut tx = cli.transaction().unwrap();
         self.collect_path(
             format!("./mocks/{name}.rs"),
             Logger {
-                tx: &con,
+                db: &mut tx,
                 crate_name: "",
                 file_name: "",
                 date_str: "",
             },
         );
+        tx.rollback().unwrap();
     }
 
     pub fn collect_path(&self, path: impl AsRef<Path>, log: Logger) {

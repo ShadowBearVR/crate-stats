@@ -2,12 +2,12 @@ use chrono::Datelike;
 use git2::Repository;
 use humantime::format_rfc3339_seconds;
 use ignore::WalkBuilder;
+use postgres::{NoTls, Transaction};
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
-use rusqlite::{Connection, Transaction};
 use stats::{Logger, ALL_RUNNERS};
+use std::env::var;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::time::SystemTime;
 mod stats;
 mod utils;
@@ -18,9 +18,9 @@ struct Args {
     /// Directory or file to parse
     #[arg(short, long, default_value = "./download/source")]
     source: PathBuf,
-    /// CSV file to write output
-    #[arg(short, long, default_value = "./output/syntax.sqlite")]
-    output: PathBuf,
+    /// Arguments to postgres client
+    #[arg(short = 'c', long, default_value = "host=/run/postgresql")]
+    postgres: postgres::Config,
 
     #[arg(long, default_value_t = default_postfix())]
     postfix: String,
@@ -102,7 +102,7 @@ fn run_versions(source_path: &Path, args: &Args) {
         .as_os_str()
         .to_string_lossy();
 
-    let mut con = Connection::open(&args.output).unwrap();
+    let mut cli = args.postgres.connect(NoTls).unwrap();
 
     let Ok(repo) = Repository::open(source_path) else {
         eprintln!("{} is not a git repository!", source_path.display());
@@ -137,15 +137,15 @@ fn run_versions(source_path: &Path, args: &Args) {
                 Some(git2::build::CheckoutBuilder::new().force()),
             )
             .unwrap();
-            let tx = con.transaction().unwrap();
-            run_version(source_path, &tx, &crate_name, &current_date);
+            let mut tx = cli.transaction().unwrap();
+            run_version(source_path, &mut tx, &crate_name, &current_date);
             tx.commit().unwrap();
             target_idx -= 1;
         }
     }
 }
 
-fn run_version(source_path: &Path, tx: &Transaction, crate_name: &str, date_str: &str) {
+fn run_version(source_path: &Path, tx: &mut Transaction, crate_name: &str, date_str: &str) {
     for path in find_rust_files(source_path) {
         let path = path.canonicalize().unwrap();
         let rel_path = path.strip_prefix(&source_path).unwrap();
@@ -158,7 +158,6 @@ fn run_version(source_path: &Path, tx: &Transaction, crate_name: &str, date_str:
             continue;
         }
         let file_name = rel_path.display().to_string();
-        let file_name = &file_name;
 
         let source = match fs::read_to_string(&path) {
             Ok(source) => source,
@@ -184,10 +183,10 @@ fn run_version(source_path: &Path, tx: &Transaction, crate_name: &str, date_str:
             run.collect_syntax(
                 &file,
                 Logger {
-                    tx: &*tx,
-                    crate_name,
-                    file_name,
-                    date_str,
+                    db: tx,
+                    crate_name: &crate_name,
+                    file_name: &file_name,
+                    date_str: &date_str,
                 },
             );
         }
@@ -195,15 +194,29 @@ fn run_version(source_path: &Path, tx: &Transaction, crate_name: &str, date_str:
 }
 
 fn main() {
-    let args: Args = clap::Parser::parse();
+    let mut args: Args = clap::Parser::parse();
     rayon::ThreadPoolBuilder::new()
         .stack_size(16 * 1024 * 1024)
         .build_global()
         .unwrap();
-    let _ = fs::remove_file(&args.output);
-    let con = Rc::new(Connection::open(&args.output).unwrap());
-    for run in ALL_RUNNERS {
-        (run.init)(&con);
+    if args.postgres.get_user().is_none() {
+        if let Ok(user) = var("USER") {
+            args.postgres.user(&user);
+        }
     }
+    if args.postgres.get_dbname().is_none() {
+        let dbname = format!("crate-stats-{}", args.postfix);
+        args.postgres.dbname("crate-stats-template");
+        let mut cli = args.postgres.connect(NoTls).unwrap();
+        cli.batch_execute(&format!("CREATE DATABASE {:?}", dbname))
+            .unwrap();
+        args.postgres.dbname(&dbname);
+    }
+    let mut cli = args.postgres.connect(NoTls).unwrap();
+    let mut tx = cli.transaction().unwrap();
+    for run in ALL_RUNNERS {
+        (run.init)(&mut tx);
+    }
+    tx.commit().unwrap();
     run_sources(&args.source.canonicalize().unwrap(), &args);
 }

@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! sql_enum {
 	{ $vis:vis enum $name:ident { $($var:ident),* $(,)* } } => {
-		#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+		#[derive(Debug, Clone, Copy, PartialEq, Eq, ::postgres_types::ToSql)]
 		$vis enum $name {
 			$($var),*
 		}
@@ -11,6 +11,17 @@ macro_rules! sql_enum {
 				match self {
 					$(Self::$var => stringify!($var)),*
 				}
+			}
+		}
+
+		impl $name {
+			pub fn init(tx: &mut ::postgres::Transaction) {
+				let query = format!(
+					"CREATE TYPE {:?} as ENUM ({});",
+					stringify!($name),
+					[$(concat!("'", stringify!($var), "'")),*].join(","),
+				);
+				tx.batch_execute(&query).unwrap();
 			}
 		}
 

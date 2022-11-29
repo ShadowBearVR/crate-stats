@@ -16,7 +16,7 @@ sql_enum! {
 }
 
 sql_enum! {
-    enum Position {
+    enum PositionType {
         Argument,
         Return,
     }
@@ -25,7 +25,7 @@ sql_enum! {
 #[derive(Debug, PartialEq, Eq)]
 pub struct Row {
     syntax: SyntaxType,
-    position: Option<Position>,
+    position: Option<PositionType>,
     generic_count: usize,
     at_count: usize,
     trait_name: String,
@@ -57,12 +57,12 @@ impl Visit<'_> for TraitParamCounter {
     }
 }
 
-struct PositionalStats<'log> {
-    stats: Stats<'log>,
-    position: Position,
+struct PositionalStats<'log, 'db> {
+    stats: Stats<'log, 'db>,
+    position: PositionType,
 }
 
-impl Visit<'_> for PositionalStats<'_> {
+impl Visit<'_> for PositionalStats<'_, '_> {
     fn visit_type_impl_trait(&mut self, node: &syn::TypeImplTrait) {
         for bound in &node.bounds {
             self.stats
@@ -78,41 +78,42 @@ impl Visit<'_> for PositionalStats<'_> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct Stats<'log> {
-    log: super::Logger<'log>,
+pub struct Stats<'log, 'db> {
+    log: super::Logger<'log, 'db>,
 }
 
-impl<'log> Stats<'log> {
-    pub fn push(&self, row: Row) {
+impl<'log, 'db> Stats<'log, 'db> {
+    pub fn push(&mut self, row: Row) {
         trace!(row = ?row);
-        self.log
+        self.log.db
             .execute(
                 "INSERT INTO traits
-                (syntax, position, at_count, generic_count, trait_name, crate_name, file_name, data_str)
+                (syntax, position, at_count, generic_count, trait_name, crate_name, file_name, date_str)
                 VALUES
-                (?,      ?,        ?,        ?,             ?,          ?,          ?,         ?)",
-                (
-                    row.syntax,
-                    row.position,
-                    row.at_count,
-                    row.generic_count,
-                    row.trait_name,
-                    self.log.crate_name,
-                    self.log.file_name,
-                    self.log.date_str,
-                ),
+                ($1,     $2,       $3,       $4,            $5,         $6,         $7,        $8)",
+                &[
+                    &row.syntax,
+                    &row.position,
+                    &(row.at_count as i32),
+                    &(row.generic_count as i32),
+                    &row.trait_name,
+                    &self.log.crate_name,
+                    &self.log.file_name,
+                    &self.log.date_str,
+                ],
             )
             .unwrap();
     }
 }
 
-impl Visit<'_> for Stats<'_> {
+impl Visit<'_> for Stats<'_, '_> {
     fn visit_fn_arg(&mut self, node: &syn::FnArg) {
         visit::visit_fn_arg(
             &mut PositionalStats {
-                stats: *self,
-                position: Position::Argument,
+                stats: Stats {
+                    log: self.log.fork(),
+                },
+                position: PositionType::Argument,
             },
             node,
         )
@@ -121,8 +122,10 @@ impl Visit<'_> for Stats<'_> {
     fn visit_return_type(&mut self, node: &syn::ReturnType) {
         visit::visit_return_type(
             &mut PositionalStats {
-                stats: *self,
-                position: Position::Return,
+                stats: Stats {
+                    log: self.log.fork(),
+                },
+                position: PositionType::Return,
             },
             node,
         )
@@ -173,12 +176,12 @@ impl Visit<'_> for Stats<'_> {
     }
 }
 
-impl Stats<'_> {
+impl Stats<'_, '_> {
     fn collect_type_param_bound(
         &mut self,
         bound: &syn::TypeParamBound,
         syntax: SyntaxType,
-        position: Option<Position>,
+        position: Option<PositionType>,
     ) {
         let trait_bound = match bound {
             syn::TypeParamBound::Trait(t) => t,
@@ -192,7 +195,7 @@ impl Stats<'_> {
         &mut self,
         path: &syn::Path,
         syntax: SyntaxType,
-        position: Option<Position>,
+        position: Option<PositionType>,
         base_at_count: usize,
     ) {
         let trait_name = match path.segments.last() {
@@ -222,17 +225,19 @@ impl Stats<'_> {
 pub const RUNNER: super::Runner = super::Runner {
     collect: |file, log| visit::visit_file(&mut Stats { log }, file),
     init: |db| {
-        db.execute_batch(
-            "CREATE TABLE traits (
-                    syntax TEXT,
-                    position TEXT,
+        SyntaxType::init(db);
+        PositionType::init(db);
+        db.batch_execute(
+            r#"CREATE TABLE traits (
+                    syntax "SyntaxType",
+                    position "PositionType",
                     at_count INT,
                     generic_count INT,
                     trait_name TEXT,
                     crate_name TEXT,
                     file_name TEXT,
-                    data_str TEXT
-                )",
+                    date_str TEXT
+            )"#,
         )
         .unwrap();
     },
