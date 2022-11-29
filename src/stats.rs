@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 pub mod traits;
+pub mod closures;
 
 pub struct Logger<'a, 'db> {
     pub db: &'a mut Transaction<'db>,
@@ -73,4 +74,4 @@ impl Runner {
     }
 }
 
-pub const ALL_RUNNERS: &[Runner] = &[traits::RUNNER];
+pub const ALL_RUNNERS: &[Runner] = &[traits::RUNNER, closures::RUNNER];
