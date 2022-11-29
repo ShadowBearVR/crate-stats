@@ -3,8 +3,8 @@ use git2::Repository;
 use humantime::format_rfc3339_seconds;
 use ignore::WalkBuilder;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
-use rusqlite::Connection;
-use stats::{AnyStats, ALL_STATS};
+use rusqlite::{Connection, Transaction};
+use stats::{Logger, ALL_RUNNERS};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -102,8 +102,7 @@ fn run_versions(source_path: &Path, args: &Args) {
         .as_os_str()
         .to_string_lossy();
 
-    let con = Rc::new(Connection::open(&args.output).unwrap());
-    let mut stats: Vec<_> = ALL_STATS.iter().map(|f| (f)(&con)).collect();
+    let mut con = Connection::open(&args.output).unwrap();
 
     let Ok(repo) = Repository::open(source_path) else {
         eprintln!("{} is not a git repository!", source_path.display());
@@ -138,13 +137,15 @@ fn run_versions(source_path: &Path, args: &Args) {
                 Some(git2::build::CheckoutBuilder::new().force()),
             )
             .unwrap();
-            run_version(source_path, &mut stats, &crate_name, &current_date);
+            let tx = con.transaction().unwrap();
+            run_version(source_path, &tx, &crate_name, &current_date);
+            tx.commit().unwrap();
             target_idx -= 1;
         }
     }
 }
 
-fn run_version(source_path: &Path, stats: &mut [AnyStats], crate_name: &str, date_str: &str) {
+fn run_version(source_path: &Path, tx: &Transaction, crate_name: &str, date_str: &str) {
     for path in find_rust_files(source_path) {
         let path = path.canonicalize().unwrap();
         let rel_path = path.strip_prefix(&source_path).unwrap();
@@ -156,6 +157,8 @@ fn run_version(source_path: &Path, stats: &mut [AnyStats], crate_name: &str, dat
             // Don't include test files
             continue;
         }
+        let file_name = rel_path.display().to_string();
+        let file_name = &file_name;
 
         let source = match fs::read_to_string(&path) {
             Ok(source) => source,
@@ -177,13 +180,16 @@ fn run_version(source_path: &Path, stats: &mut [AnyStats], crate_name: &str, dat
             }
         };
 
-        for stats in stats.iter_mut() {
-            stats.set_location(
-                crate_name.to_string(),
-                rel_path.display().to_string(),
-                date_str.to_string(),
+        for run in ALL_RUNNERS {
+            run.collect_syntax(
+                &file,
+                Logger {
+                    tx: &*tx,
+                    crate_name,
+                    file_name,
+                    date_str,
+                },
             );
-            stats.collect_syntax(&file);
         }
     }
 }
@@ -194,9 +200,10 @@ fn main() {
         .stack_size(16 * 1024 * 1024)
         .build_global()
         .unwrap();
+    let _ = fs::remove_file(&args.output);
     let con = Rc::new(Connection::open(&args.output).unwrap());
-    for f in ALL_STATS {
-        (f)(&con).init();
+    for run in ALL_RUNNERS {
+        (run.init)(&con);
     }
     run_sources(&args.source.canonicalize().unwrap(), &args);
 }

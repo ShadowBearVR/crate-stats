@@ -1,59 +1,72 @@
 use rusqlite::Connection;
-use std::{fmt::Display, fs, rc::Rc};
-use syn::visit::{self, Visit};
+use std::fs;
+use std::path::Path;
 
 pub mod traits;
 
-pub trait Stats: for<'a> Visit<'a> + Sized + 'static {
-    const NEW: NewStats = |db| Box::new(Self::new(db.clone()));
-
-    fn new(db: Rc<Connection>) -> Self;
-    fn init(&self);
-    fn set_location(
-        &mut self,
-        crate_name: impl Display,
-        file_name: impl Display,
-        date_str: impl Display,
-    );
+#[derive(Copy, Clone)]
+pub struct Logger<'a> {
+    pub tx: &'a Connection,
+    pub crate_name: &'a str,
+    pub file_name: &'a str,
+    pub date_str: &'a str,
 }
 
-pub trait DynStats {
-    fn init(&self);
-    fn set_location(&mut self, crate_name: String, file_name: String, date_str: String);
-    fn collect(&mut self, path: &std::path::Path) -> Result<(), syn::Error>;
-    fn collect_syntax(&mut self, file: &syn::File);
+impl<'a> std::ops::Deref for Logger<'a> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.tx
+    }
 }
 
-impl<S> DynStats for S
-where
-    S: Stats,
-{
-    fn init(&self) {
-        Stats::init(self);
+#[derive(Clone, Copy)]
+pub struct Runner {
+    pub init: fn(con: &Connection),
+    pub collect: fn(file: &syn::File, log: Logger),
+}
+
+impl Runner {
+#[allow(unused)]
+    pub fn collect_mock(&self, name: &str) {
+        let con = Connection::open_in_memory().unwrap();
+        self.collect_path(
+            format!("./mocks/{name}.rs"),
+            Logger {
+                tx: &con,
+                crate_name: "",
+                file_name: "",
+                date_str: "",
+            },
+        );
     }
 
-    fn set_location(&mut self, crate_name: String, file_name: String, date_str: String) {
-        Stats::set_location(self, crate_name, file_name, date_str);
-    }
-
-    fn collect_syntax(&mut self, file: &syn::File) {
-        self.visit_file(file);
-    }
-
-    fn collect(&mut self, path: &std::path::Path) -> Result<(), syn::Error> {
-        match fs::read_to_string(path) {
-            Ok(source) => {
-                let file = syn::parse_file(&source)?;
-                visit::visit_file(self, &file);
-            }
+    pub fn collect_path(&self, path: impl AsRef<Path>, log: Logger) {
+        let source = match fs::read_to_string(&path) {
+            Ok(source) => source,
             Err(err) => {
-                eprintln!("Error reading {}: {}", path.display(), err);
+                eprintln!("Error reading {}: {}", path.as_ref().display(), err);
+                return;
             }
-        }
-        Ok(())
+        };
+        let file = match syn::parse_file(&source) {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!(
+                    "Error parsing {}:{}: {}",
+                    path.as_ref().display(),
+                    err.span().start().line,
+                    err
+                );
+                return;
+            }
+        };
+        (self.collect)(&file, log);
+    }
+
+    pub fn collect_syntax(&self, file: &syn::File, log: Logger) {
+        (self.collect)(file, log)
     }
 }
 
-pub type AnyStats = Box<dyn DynStats>;
-pub type NewStats = fn(&Rc<Connection>) -> AnyStats;
-pub const ALL_STATS: &[NewStats] = &[traits::Stats::NEW];
+pub const ALL_RUNNERS: &[Runner] = &[traits::RUNNER];

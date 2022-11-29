@@ -1,11 +1,7 @@
 use crate::sql_enum;
-use rusqlite::Connection;
-use std::{fmt::Display, rc::Rc};
 use syn::visit::{self, Visit};
 use tracing::trace;
 
-#[cfg(test)]
-use super::DynStats as _;
 #[cfg(test)]
 use tracing_test::traced_test;
 
@@ -61,8 +57,8 @@ impl Visit<'_> for TraitParamCounter {
     }
 }
 
-struct PositionalStats<'stats> {
-    stats: &'stats mut Stats,
+struct PositionalStats<'log> {
+    stats: Stats<'log>,
     position: Position,
 }
 
@@ -82,17 +78,15 @@ impl Visit<'_> for PositionalStats<'_> {
     }
 }
 
-pub struct Stats {
-    db: Rc<Connection>,
-    crate_name: String,
-    file_name: String,
-    date_str: String,
+#[derive(Clone, Copy)]
+pub struct Stats<'log> {
+    log: super::Logger<'log>,
 }
 
-impl Stats {
+impl<'log> Stats<'log> {
     pub fn push(&self, row: Row) {
         trace!(row = ?row);
-        self.db
+        self.log
             .execute(
                 "INSERT INTO traits
                 (syntax, position, at_count, generic_count, trait_name, crate_name, file_name, data_str)
@@ -104,59 +98,20 @@ impl Stats {
                     row.at_count,
                     row.generic_count,
                     row.trait_name,
-                    &self.crate_name,
-                    &self.file_name,
-                    &self.date_str,
+                    self.log.crate_name,
+                    self.log.file_name,
+                    self.log.date_str,
                 ),
             )
             .unwrap();
     }
 }
 
-impl super::Stats for Stats {
-    fn new(db: Rc<Connection>) -> Self {
-        Stats {
-            db,
-            crate_name: "".to_string(),
-            file_name: "".to_string(),
-            date_str: "".to_string(),
-        }
-    }
-
-    fn set_location(
-        &mut self,
-        crate_name: impl Display,
-        file_name: impl Display,
-        date_str: impl Display,
-    ) {
-        self.crate_name = crate_name.to_string();
-        self.file_name = file_name.to_string();
-        self.date_str = date_str.to_string();
-    }
-
-    fn init(&self) {
-        self.db
-            .execute_batch(
-                "CREATE TABLE traits (
-                    syntax TEXT,
-                    position TEXT,
-                    at_count INT,
-                    generic_count INT,
-                    trait_name TEXT,
-                    crate_name TEXT,
-                    file_name TEXT,
-                    data_str TEXT
-                )",
-            )
-            .unwrap();
-    }
-}
-
-impl Visit<'_> for Stats {
+impl Visit<'_> for Stats<'_> {
     fn visit_fn_arg(&mut self, node: &syn::FnArg) {
         visit::visit_fn_arg(
             &mut PositionalStats {
-                stats: self,
+                stats: *self,
                 position: Position::Argument,
             },
             node,
@@ -166,7 +121,7 @@ impl Visit<'_> for Stats {
     fn visit_return_type(&mut self, node: &syn::ReturnType) {
         visit::visit_return_type(
             &mut PositionalStats {
-                stats: self,
+                stats: *self,
                 position: Position::Return,
             },
             node,
@@ -218,7 +173,7 @@ impl Visit<'_> for Stats {
     }
 }
 
-impl Stats {
+impl Stats<'_> {
     fn collect_type_param_bound(
         &mut self,
         bound: &syn::TypeParamBound,
@@ -264,23 +219,29 @@ impl Stats {
     }
 }
 
-#[cfg(test)]
-fn collect_mock(name: &str) {
-    let file_name = format!("./mocks/{name}.rs");
-    let mut stats = Stats {
-        db: Rc::new(Connection::open_in_memory().unwrap()),
-        crate_name: name.to_string(),
-        file_name: file_name.clone(),
-        date_str: "".to_string(),
-    };
-    stats.init();
-    stats.collect(file_name.as_ref()).unwrap();
-}
+pub const RUNNER: super::Runner = super::Runner {
+    collect: |file, log| visit::visit_file(&mut Stats { log }, file),
+    init: |db| {
+        db.execute_batch(
+            "CREATE TABLE traits (
+                    syntax TEXT,
+                    position TEXT,
+                    at_count INT,
+                    generic_count INT,
+                    trait_name TEXT,
+                    crate_name TEXT,
+                    file_name TEXT,
+                    data_str TEXT
+                )",
+        )
+        .unwrap();
+    },
+};
 
 #[test]
 #[traced_test]
 fn test_impl_for() {
-    collect_mock("impl_for");
+    RUNNER.collect_mock("impl_for");
     vec![Row {
         syntax: SyntaxType::ImplFor,
         position: None,
@@ -293,7 +254,7 @@ fn test_impl_for() {
 #[test]
 #[traced_test]
 fn test_iterator_arg() {
-    collect_mock("iterator_arg");
+    RUNNER.collect_mock("iterator_arg");
     assert!(logs_contain(
         r#"row=Row { syntax: TypeImpl, position: Some(Argument), generic_count: 0, at_count: 1, trait_name: "Iterator" }"#,
     ));
@@ -302,7 +263,7 @@ fn test_iterator_arg() {
 #[test]
 #[traced_test]
 fn test_iterator_ret() {
-    collect_mock("iterator_ret");
+    RUNNER.collect_mock("iterator_ret");
     assert!(logs_contain(
         r#"row=Row { syntax: TypeImpl, position: Some(Return), generic_count: 0, at_count: 1, trait_name: "Iterator" }"#,
     ));
@@ -311,7 +272,7 @@ fn test_iterator_ret() {
 #[test]
 #[traced_test]
 fn test_dyn_iterator_arg() {
-    collect_mock("dyn_iterator_arg");
+    RUNNER.collect_mock("dyn_iterator_arg");
     assert!(logs_contain(
         r#"row=Row { syntax: TypeDyn, position: Some(Argument), generic_count: 0, at_count: 1, trait_name: "Iterator" }"#,
     ));
@@ -320,7 +281,7 @@ fn test_dyn_iterator_arg() {
 #[test]
 #[traced_test]
 fn test_many_generics() {
-    collect_mock("many_generics");
+    RUNNER.collect_mock("many_generics");
     assert!(logs_contain(
         r#"row=Row { syntax: TraitDef, position: None, generic_count: 3, at_count: 1, trait_name: "Mock" }"#,
     ));
@@ -332,7 +293,7 @@ fn test_many_generics() {
 #[test]
 #[traced_test]
 fn test_where_clause() {
-    collect_mock("where_clause");
+    RUNNER.collect_mock("where_clause");
     assert!(logs_contain(
         r#"row=Row { syntax: WhereClause, position: None, generic_count: 0, at_count: 1, trait_name: "Iterator" }"#,
     ));
