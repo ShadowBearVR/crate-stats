@@ -118,11 +118,7 @@ fn run_versions(source_path: &Path, args: &Args) {
     let ending_idx = args.end_date.0 + args.end_date.1 * 12;
     let mut target_idx = ending_idx;
 
-    for oid in repo_revwalk {
-        if target_idx < starting_idx {
-            break;
-        }
-
+    'revwalk: for oid in repo_revwalk {
         let oid = oid.unwrap();
         let commit = repo.find_commit(oid).unwrap();
         let seconds_since_epoch = commit.time().seconds();
@@ -130,15 +126,20 @@ fn run_versions(source_path: &Path, args: &Args) {
         let current_idx = time.month0() + time.year_ce().1 * 12;
 
         while current_idx <= target_idx {
+            if target_idx < starting_idx {
+                break 'revwalk;
+            }
+
             let current_date = format!("{}-{}", current_idx % 12 + 1, current_idx / 12);
-            println!("Checking out {crate_name} at {current_date}.");
+            let target_date = format!("{}-{}", target_idx % 12 + 1, target_idx / 12);
+            println!("Checking out {crate_name} at {current_date} for {target_date}.");
             repo.checkout_tree(
                 commit.as_object(),
                 Some(git2::build::CheckoutBuilder::new().force()),
             )
             .unwrap();
             let mut tx = cli.transaction().unwrap();
-            run_version(source_path, &mut tx, &crate_name, &current_date);
+            run_version(source_path, &mut tx, &crate_name, &target_date);
             tx.commit().unwrap();
             target_idx -= 1;
         }
