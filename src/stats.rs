@@ -1,24 +1,23 @@
 use postgres::{Client, NoTls, Transaction};
 use std::fs;
 use std::path::Path;
+use uuid::Uuid;
 
 pub mod traits;
 pub mod closures;
 
 pub struct Logger<'a, 'db> {
     pub db: &'a mut Transaction<'db>,
-    pub crate_name: &'a str,
     pub file_name: &'a str,
-    pub date_str: &'a str,
+    pub version_id: Uuid,
 }
 
 impl<'a, 'db> Logger<'a, 'db> {
     pub fn fork<'b>(&'b mut self) -> Logger<'b, 'db> {
         Logger {
             db: self.db,
-            crate_name: self.crate_name,
             file_name: self.file_name,
-            date_str: self.date_str,
+            version_id: self.version_id,
         }
     }
 }
@@ -38,9 +37,8 @@ impl Runner {
             format!("./mocks/{name}.rs"),
             Logger {
                 db: &mut tx,
-                crate_name: "",
                 file_name: "",
-                date_str: "",
+                version_id: Uuid::default(),
             },
         );
         tx.rollback().unwrap();

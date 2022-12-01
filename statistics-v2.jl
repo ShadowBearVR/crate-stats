@@ -29,14 +29,17 @@ using Tables
 # ╔═╡ bc94c7d2-d05c-4833-9c36-b536e33daf6f
 using DataFrames
 
+# ╔═╡ 1ce34845-d7e6-471d-a81b-d5c2c9f4e343
+using StatsBase
+
 # ╔═╡ 0f5d60b4-e7f8-49f7-a5f5-d7c2a3b3935c
-@bind db_name TextField()
+@bind db_name confirm(TextField())
 
 # ╔═╡ 61c9db59-cd3b-4d16-85a4-557acad229e6
 conn = LibPQ.Connection("dbname=$(db_name) host=localhost user=macdonald")
 
 # ╔═╡ b1ab8f76-b7d1-4e9f-979a-37be33ff06b6
- df = DataFrame(execute(conn, "SELECT DISTINCT crate_name, date_str FROM traits"))
+ df = DataFrame(execute(conn, "SELECT DISTINCT crate_name, date_str FROM versions"))
 
 # ╔═╡ 549b9e40-8a9d-4c60-b0eb-698bf60e9374
 function date2int(s::String)
@@ -48,7 +51,58 @@ end
 date2rational(s) = date2int(s) // 12
 
 # ╔═╡ 26caa971-37cf-4d80-b744-d3d2c2529cac
-histogram(date2rational.(df[!, :date_str]))
+plot(counts(date2int.(df[!, :date_str])))
+
+# ╔═╡ 167a659f-bd5b-4699-aec5-942bbeb852f4
+version_ids = DataFrame(execute(conn, "SELECT id FROM versions"))[!, :id]
+
+# ╔═╡ fcc04503-b7e2-4671-b519-8c56f894d6e2
+struct Point
+	version_id
+	trait_counts
+	num_closures
+end
+
+# ╔═╡ c67f8329-4139-4f4e-999f-a0269786944e
+function collect_stats(version_id)
+	trait_counts_df = DataFrame(execute(conn, "SELECT trait_name, COUNT(*) FROM traits WHERE version_id=\$1 GROUP BY trait_name", [version_id]))
+	Point(
+		version_id,
+		Dict(trait_counts_df[!, :trait_name] .=> trait_counts_df[!, :count]),
+		0
+	)
+end
+
+# ╔═╡ 92861988-d71b-4538-bae5-9f93f1c30cce
+@bind version_ind Slider(1:length(version_ids))
+
+# ╔═╡ 6b825fa2-a3a6-44b6-833c-b0c4147e9d48
+version_id = version_ids[version_ind]
+
+# ╔═╡ eed4a9b6-fbd9-4239-8e1f-730c8f7a793a
+execute(conn, "SELECT * FROM versions WHERE id=\$1", [version_id])
+
+# ╔═╡ 2c3398e1-1bb0-47db-8ad1-41a991d68e81
+collect_stats(version_id)
+
+# ╔═╡ 436d5c8d-d303-4257-b873-c6b6839277e6
+begin
+	reduce_stats(d::Vector{Dict}) = Dict(
+		k => v/length(d) for (k,v)=mergewith(+, d...)
+	)
+	reduce_stats(v::Vector{R}) where R<:Real = mean(v)
+	reduce_stats(s::Vector{Point}) = Point(
+		nothing,
+		reduce_stats(getfield.(s, :trait_counts)),
+		reduce_stats(getfield.(s, :num_closures)),
+	)
+end
+
+# ╔═╡ 4211511c-5917-4923-9b83-dcc5c3ea5f20
+stats = reduce_stats(collect_stats.(version_ids))
+
+# ╔═╡ 3860ee86-ca18-459e-abe8-7b12b36a10ed
+sort(collect(stats.trait_counts), by=x->x[2], rev=true)
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -57,6 +111,7 @@ DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 LibPQ = "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
 
 [compat]
@@ -64,6 +119,7 @@ DataFrames = "~1.4.3"
 LibPQ = "~1.14.1"
 Plots = "~1.36.6"
 PlutoUI = "~0.7.49"
+StatsBase = "~0.33.21"
 Tables = "~1.10.0"
 """
 
@@ -73,7 +129,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.8.3"
 manifest_format = "2.0"
-project_hash = "11891ef4d0504a6b1139878d2d6db26dd62e330f"
+project_hash = "8a18ccfa55d09ee2007d2a1e7b1e1b438364a108"
 
 [[deps.AbstractPlutoDingetjes]]
 deps = ["Pkg"]
@@ -1201,11 +1257,22 @@ version = "1.4.1+0"
 # ╠═09e5938d-1133-4e5d-9518-5707ca6e052e
 # ╠═da420d96-b881-4597-9e79-493a80c7c3ee
 # ╠═bc94c7d2-d05c-4833-9c36-b536e33daf6f
+# ╠═1ce34845-d7e6-471d-a81b-d5c2c9f4e343
 # ╠═0f5d60b4-e7f8-49f7-a5f5-d7c2a3b3935c
 # ╠═61c9db59-cd3b-4d16-85a4-557acad229e6
 # ╠═b1ab8f76-b7d1-4e9f-979a-37be33ff06b6
 # ╠═549b9e40-8a9d-4c60-b0eb-698bf60e9374
 # ╠═94356184-e349-4523-9256-893b7d9a800e
 # ╠═26caa971-37cf-4d80-b744-d3d2c2529cac
+# ╠═167a659f-bd5b-4699-aec5-942bbeb852f4
+# ╠═fcc04503-b7e2-4671-b519-8c56f894d6e2
+# ╠═c67f8329-4139-4f4e-999f-a0269786944e
+# ╠═92861988-d71b-4538-bae5-9f93f1c30cce
+# ╠═6b825fa2-a3a6-44b6-833c-b0c4147e9d48
+# ╠═eed4a9b6-fbd9-4239-8e1f-730c8f7a793a
+# ╠═2c3398e1-1bb0-47db-8ad1-41a991d68e81
+# ╠═436d5c8d-d303-4257-b873-c6b6839277e6
+# ╠═4211511c-5917-4923-9b83-dcc5c3ea5f20
+# ╠═3860ee86-ca18-459e-abe8-7b12b36a10ed
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

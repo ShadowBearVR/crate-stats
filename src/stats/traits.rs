@@ -88,18 +88,17 @@ impl<'log, 'db> Stats<'log, 'db> {
         self.log.db
             .execute(
                 "INSERT INTO traits
-                (syntax, position, at_count, generic_count, trait_name, crate_name, file_name, date_str)
+                (syntax, position, at_count, generic_count, trait_name, file_name, version_id)
                 VALUES
-                ($1,     $2,       $3,       $4,            $5,         $6,         $7,        $8)",
+                ($1,     $2,       $3,       $4,            $5,         $6,        $7)",
                 &[
                     &row.syntax,
                     &row.position,
                     &(row.at_count as i32),
                     &(row.generic_count as i32),
                     &row.trait_name,
-                    &self.log.crate_name,
                     &self.log.file_name,
-                    &self.log.date_str,
+                    &self.log.version_id,
                 ],
             )
             .unwrap();
@@ -227,17 +226,19 @@ pub const RUNNER: super::Runner = super::Runner {
     init: |db| {
         SyntaxType::init(db);
         PositionType::init(db);
-        db.batch_execute(
-            r#"CREATE TABLE traits (
-                    syntax "SyntaxType",
-                    position "PositionType",
-                    at_count INT,
-                    generic_count INT,
-                    trait_name TEXT,
-                    crate_name TEXT,
-                    file_name TEXT,
-                    date_str TEXT
-            )"#,
+        db.batch_execute(r#"
+            CREATE TABLE traits (
+                syntax "SyntaxType",
+                position "PositionType",
+                at_count INT,
+                generic_count INT,
+                trait_name TEXT,
+                file_name TEXT,
+                version_id UUID references versions(id)
+            )
+            CREATE INDEX traits_version_index ON traits(version_id)
+            CREATE INDEX traits_version_index ON traits(trait_name)
+        "#,
         )
         .unwrap();
     },

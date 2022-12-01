@@ -9,6 +9,8 @@ use std::env::var;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use uuid::Uuid;
+
 mod stats;
 mod utils;
 
@@ -147,6 +149,14 @@ fn run_versions(source_path: &Path, args: &Args) {
 }
 
 fn run_version(source_path: &Path, tx: &mut Transaction, crate_name: &str, date_str: &str) {
+
+    let version_id = Uuid::new_v4();
+
+    tx.execute(
+        r"INSERT INTO versions (id, crate_name, date_str) VALUES ($1, $2, $3)",
+        &[&version_id, &crate_name, &date_str],
+    ).unwrap();
+
     for path in find_rust_files(source_path) {
         let path = path.canonicalize().unwrap();
         let rel_path = path.strip_prefix(&source_path).unwrap();
@@ -180,14 +190,15 @@ fn run_version(source_path: &Path, tx: &mut Transaction, crate_name: &str, date_
             }
         };
 
+        
+
         for run in ALL_RUNNERS {
             run.collect_syntax(
                 &file,
                 Logger {
                     db: tx,
-                    crate_name: &crate_name,
                     file_name: &file_name,
-                    date_str: &date_str,
+                    version_id,
                 },
             );
         }
@@ -215,6 +226,16 @@ fn main() {
     }
     let mut cli = args.postgres.connect(NoTls).unwrap();
     let mut tx = cli.transaction().unwrap();
+
+    tx.batch_execute(
+        r#"CREATE TABLE versions (
+                id UUID PRIMARY KEY,
+                crate_name TEXT,
+                date_str TEXT
+        )"#,
+    )
+    .unwrap();
+
     for run in ALL_RUNNERS {
         (run.init)(&mut tx);
     }
