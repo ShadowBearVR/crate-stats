@@ -30,6 +30,7 @@ postgres-types = { version = "0.2", features = ["derive", "uuid-1"] }
 tracing = "^0.1.37"
 tracing-test = "^0.2.3"
 uuid = { version = "^1.2", features = ["v4"] }
+quote = "^1.0"
 
 [profile.dev]
 opt-level = 2

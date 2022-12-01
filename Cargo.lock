@@ -253,6 +253,7 @@ dependencies = [
  "postgres",
  "postgres-types",
  "proc-macro2",
+ "quote",
  "rayon",
  "rusqlite",
  "serde",

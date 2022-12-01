@@ -3,8 +3,9 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
-pub mod traits;
 pub mod closures;
+pub mod traits;
+pub mod unsafe_code;
 
 pub struct Logger<'a, 'db> {
     pub db: &'a mut Transaction<'db>,
@@ -22,6 +23,17 @@ impl<'a, 'db> Logger<'a, 'db> {
     }
 }
 
+pub fn global_init(tx: &mut Transaction) {
+    tx.batch_execute(
+        r#"CREATE TABLE versions (
+                id UUID PRIMARY KEY,
+                crate_name TEXT,
+                date_str TEXT
+        );"#,
+    )
+    .unwrap();
+}
+
 #[derive(Clone, Copy)]
 pub struct Runner {
     pub init: fn(db: &mut Transaction),
@@ -31,14 +43,29 @@ pub struct Runner {
 impl Runner {
     #[allow(unused)]
     pub fn collect_mock(&self, name: &str) {
-        let mut cli = Client::connect("crate-stats-test", NoTls).unwrap();
+        let mut cli = Client::connect(
+            "dbname=crate-stats-test host=localhost user=macdonald",
+            NoTls,
+        )
+        .unwrap();
         let mut tx = cli.transaction().unwrap();
+        global_init(&mut tx);
+        (self.init)(&mut tx);
+
+        let version_id = Uuid::new_v4();
+
+        tx.execute(
+            r"INSERT INTO versions (id, crate_name, date_str) VALUES ($1, $2, $3)",
+            &[&version_id, &name, &""],
+        )
+        .unwrap();
+
         self.collect_path(
             format!("./mocks/{name}.rs"),
             Logger {
                 db: &mut tx,
                 file_name: "",
-                version_id: Uuid::default(),
+                version_id,
             },
         );
         tx.rollback().unwrap();
@@ -72,4 +99,4 @@ impl Runner {
     }
 }
 
-pub const ALL_RUNNERS: &[Runner] = &[traits::RUNNER, closures::RUNNER];
+pub const ALL_RUNNERS: &[Runner] = &[traits::RUNNER, closures::RUNNER, unsafe_code::RUNNER];

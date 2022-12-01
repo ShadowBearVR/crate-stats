@@ -149,13 +149,13 @@ fn run_versions(source_path: &Path, args: &Args) {
 }
 
 fn run_version(source_path: &Path, tx: &mut Transaction, crate_name: &str, date_str: &str) {
-
     let version_id = Uuid::new_v4();
 
     tx.execute(
         r"INSERT INTO versions (id, crate_name, date_str) VALUES ($1, $2, $3)",
         &[&version_id, &crate_name, &date_str],
-    ).unwrap();
+    )
+    .unwrap();
 
     for path in find_rust_files(source_path) {
         let path = path.canonicalize().unwrap();
@@ -189,8 +189,6 @@ fn run_version(source_path: &Path, tx: &mut Transaction, crate_name: &str, date_
                 return;
             }
         };
-
-        
 
         for run in ALL_RUNNERS {
             run.collect_syntax(
@@ -227,14 +225,7 @@ fn main() {
     let mut cli = args.postgres.connect(NoTls).unwrap();
     let mut tx = cli.transaction().unwrap();
 
-    tx.batch_execute(
-        r#"CREATE TABLE versions (
-                id UUID PRIMARY KEY,
-                crate_name TEXT,
-                date_str TEXT
-        )"#,
-    )
-    .unwrap();
+    stats::global_init(&mut tx);
 
     for run in ALL_RUNNERS {
         (run.init)(&mut tx);

@@ -85,7 +85,8 @@ pub struct Stats<'log, 'db> {
 impl<'log, 'db> Stats<'log, 'db> {
     pub fn push(&mut self, row: Row) {
         trace!(row = ?row);
-        self.log.db
+        self.log
+            .db
             .execute(
                 "INSERT INTO traits
                 (syntax, position, at_count, generic_count, trait_name, file_name, version_id)
@@ -226,7 +227,8 @@ pub const RUNNER: super::Runner = super::Runner {
     init: |db| {
         SyntaxType::init(db);
         PositionType::init(db);
-        db.batch_execute(r#"
+        db.batch_execute(
+            r#"
             CREATE TABLE traits (
                 syntax "SyntaxType",
                 position "PositionType",
@@ -235,9 +237,9 @@ pub const RUNNER: super::Runner = super::Runner {
                 trait_name TEXT,
                 file_name TEXT,
                 version_id UUID references versions(id)
-            )
-            CREATE INDEX traits_version_index ON traits(version_id)
-            CREATE INDEX traits_version_index ON traits(trait_name)
+            );
+            CREATE INDEX traits_version_index ON traits(version_id);
+            CREATE INDEX traits_name_index ON traits(trait_name);
         "#,
         )
         .unwrap();
