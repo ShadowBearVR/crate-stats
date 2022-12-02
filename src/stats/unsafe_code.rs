@@ -33,6 +33,11 @@ impl Visit<'_> for Stats<'_, '_> {
             count: 0,
         };
         visit::visit_item_fn(&mut child, node);
+
+        if node.sig.unsafety.is_none() {
+            return;
+        }
+
         let count = child.count;
 
         self.log.db.execute(
@@ -126,6 +131,14 @@ fn test_unsafe_fn() {
     RUNNER.collect_mock("unsafe_fn");
     assert!(logs_contain(r#"ty="Block""#));
     assert!(logs_contain(r#"count=4 ty="Function""#));
+}
+
+#[test]
+#[traced_test]
+fn test_safe_fn() {
+    RUNNER.collect_mock("iterator_arg");
+    assert!(!logs_contain(r#"ty="Block""#));
+    assert!(!logs_contain(r#"count=0 ty="Function""#));
 }
 
 #[test]

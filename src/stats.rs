@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
+pub mod async_code;
 pub mod closures;
 pub mod traits;
 pub mod unsafe_code;
@@ -60,23 +61,26 @@ impl Runner {
         )
         .unwrap();
 
-        self.collect_path(
-            format!("./mocks/{name}.rs"),
-            Logger {
-                db: &mut tx,
-                file_name: "",
-                version_id,
-            },
+        assert!(
+            self.collect_path(
+                format!("./mocks/{name}.rs"),
+                Logger {
+                    db: &mut tx,
+                    file_name: "",
+                    version_id,
+                },
+            ),
+            "could not parse mock"
         );
         tx.rollback().unwrap();
     }
 
-    pub fn collect_path(&self, path: impl AsRef<Path>, log: Logger) {
+    pub fn collect_path(&self, path: impl AsRef<Path>, log: Logger) -> bool {
         let source = match fs::read_to_string(&path) {
             Ok(source) => source,
             Err(err) => {
                 eprintln!("Error reading {}: {}", path.as_ref().display(), err);
-                return;
+                return false;
             }
         };
         let file = match syn::parse_file(&source) {
@@ -88,10 +92,11 @@ impl Runner {
                     err.span().start().line,
                     err
                 );
-                return;
+                return false;
             }
         };
         (self.collect)(&file, log);
+        true
     }
 
     pub fn collect_syntax(&self, file: &syn::File, log: Logger) {
