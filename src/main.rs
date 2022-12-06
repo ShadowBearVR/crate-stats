@@ -22,7 +22,7 @@ struct Args {
     #[arg(short, long, default_value = "./download/source")]
     source: PathBuf,
     /// Arguments to postgres client
-    #[arg(short = 'c', long, default_value = "host=/run/postgresql")]
+    #[arg(short = 'c', long, default_value = "host=localhost")]
     postgres: postgres::Config,
 
     #[arg(long, default_value_t = default_postfix())]
