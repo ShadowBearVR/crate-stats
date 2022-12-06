@@ -104,4 +104,9 @@ impl Runner {
     }
 }
 
-pub const ALL_RUNNERS: &[Runner] = &[traits::RUNNER, closures::RUNNER, unsafe_code::RUNNER];
+pub const ALL_RUNNERS: &[Runner] = &[
+    traits::RUNNER,
+    closures::RUNNER,
+    unsafe_code::RUNNER,
+    async_code::RUNNER,
+];
