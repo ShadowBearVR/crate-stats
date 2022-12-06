@@ -9,6 +9,7 @@ use std::env::var;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use tokei::{Config, LanguageType, Languages};
 use uuid::Uuid;
 
 mod stats;
@@ -151,9 +152,17 @@ fn run_versions(source_path: &Path, args: &Args) {
 fn run_version(source_path: &Path, tx: &mut Transaction, crate_name: &str, date_str: &str) {
     let version_id = Uuid::new_v4();
 
+    let paths = &[source_path];
+    let excluded = &[];
+    let config = Config::default();
+
+    let mut languages = Languages::new();
+    languages.get_statistics(paths, excluded, &config);
+    let rust = &languages[&LanguageType::Rust];
+
     tx.execute(
-        r"INSERT INTO versions (id, crate_name, date_str) VALUES ($1, $2, $3)",
-        &[&version_id, &crate_name, &date_str],
+        r"INSERT INTO versions (id, crate_name, date_str, line_count_rust) VALUES ($1, $2, $3, $4)",
+        &[&version_id, &crate_name, &date_str, &(rust.code as i32)],
     )
     .unwrap();
 

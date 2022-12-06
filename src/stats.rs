@@ -29,7 +29,8 @@ pub fn global_init(tx: &mut Transaction) {
         r#"CREATE TABLE versions (
                 id UUID PRIMARY KEY,
                 crate_name TEXT,
-                date_str TEXT
+                date_str TEXT,
+                line_count_rust INT
         );"#,
     )
     .unwrap();
@@ -99,7 +100,7 @@ impl Runner {
         true
     }
 
-    pub fn collect_syntax(&self, file: &syn::File, log: Logger) {
+    pub fn gitcollect_syntax(&self, file: &syn::File, log: Logger) {
         (self.collect)(file, log)
     }
 }
