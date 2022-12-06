@@ -1,3 +1,4 @@
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 
 impl Visit<'_> for Stats<'_, '_> {
@@ -5,8 +6,8 @@ impl Visit<'_> for Stats<'_, '_> {
         self.log
             .db
             .execute(
-                r"INSERT INTO closures (file_name, is_try_like, version_id) VALUES ($1, $2, $3)",
-                &[&self.log.file_name, &self.is_in_call, &self.log.version_id],
+                r"INSERT INTO closures (file_name, line_number, is_try_like, version_id) VALUES ($1, $2, $3, $4)",
+                &[&self.log.file_name, &(node.span().start().line as i32), &self.is_in_call, &self.log.version_id],
             )
             .unwrap();
 
@@ -54,6 +55,7 @@ pub const RUNNER: super::Runner = super::Runner {
             r#"
             CREATE TABLE closures (
                 file_name TEXT,
+                line_number INT,
                 is_try_like BOOLEAN,
                 version_id UUID references versions(id)
             );

@@ -1,4 +1,6 @@
 use crate::sql_enum;
+use proc_macro2::Span;
+use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
 use tracing::trace;
 
@@ -95,15 +97,15 @@ pub struct Stats<'log, 'db> {
 }
 
 impl<'log, 'db> Stats<'log, 'db> {
-    pub fn push(&mut self, row: Row) {
+    pub fn push(&mut self, row: Row, span: Span) {
         trace!(row = ?row);
         self.log
             .db
             .execute(
                 "INSERT INTO traits
-                (syntax, position, at_count, gat_count, generic_count, bounds_count, trait_name, file_name, version_id)
+                (syntax, position, at_count, gat_count, generic_count, bounds_count, trait_name, file_name, line_number, version_id)
                 VALUES
-                ($1,     $2,       $3,       $4,        $5,           $6,            $7,        $8,         $9        )",
+                ($1,     $2,       $3,       $4,        $5,           $6,            $7,        $8,         $9,          $10       )",
                 &[
                     &row.syntax,
                     &row.position,
@@ -113,6 +115,7 @@ impl<'log, 'db> Stats<'log, 'db> {
                     &(row.bounds_count as i32),
                     &row.trait_name,
                     &self.log.file_name,
+                    &(span.start().line as i32),
                     &self.log.version_id,
                 ],
             )
@@ -212,15 +215,18 @@ impl Visit<'_> for Stats<'_, '_> {
             })
             .count();
 
-        self.push(Row {
-            syntax: SyntaxType::TraitDef,
-            position: None,
-            generic_count,
-            gat_count: Some(gat_count),
-            at_count,
-            trait_name: node.ident.to_string(),
-            bounds_count: 0,
-        });
+        self.push(
+            Row {
+                syntax: SyntaxType::TraitDef,
+                position: None,
+                generic_count,
+                gat_count: Some(gat_count),
+                at_count,
+                trait_name: node.ident.to_string(),
+                bounds_count: 0,
+            },
+            node.ident.span(),
+        );
     }
 }
 
@@ -258,15 +264,18 @@ impl Stats<'_, '_> {
 
         visit::visit_path(&mut counter, path);
 
-        self.push(Row {
-            syntax,
-            position,
-            generic_count: counter.generic_count,
-            at_count: counter.at_count + base_at_count,
-            gat_count: gat_count,
-            trait_name,
-            bounds_count,
-        });
+        self.push(
+            Row {
+                syntax,
+                position,
+                generic_count: counter.generic_count,
+                at_count: counter.at_count + base_at_count,
+                gat_count,
+                trait_name,
+                bounds_count,
+            },
+            path.span(),
+        );
     }
 }
 
@@ -285,6 +294,7 @@ pub const RUNNER: super::Runner = super::Runner {
                 generic_count INT,
                 bounds_count INT,
                 trait_name TEXT,
+                line_number INT,
                 file_name TEXT,
                 version_id UUID references versions(id)
             );

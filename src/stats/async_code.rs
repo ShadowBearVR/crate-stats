@@ -1,6 +1,9 @@
 use crate::sql_enum;
 use quote::ToTokens;
-use syn::visit::{self, Visit};
+use syn::{
+    spanned::Spanned,
+    visit::{self, Visit},
+};
 use tracing::trace;
 #[cfg(test)]
 use tracing_test::traced_test;
@@ -41,8 +44,8 @@ impl Visit<'_> for Stats<'_, '_> {
         let count = child.count;
 
         self.log.db.execute(
-            r"INSERT INTO async_code (async_code_type, block_count, file_name, version_id) VALUES ($1, $2, $3, $4)",
-            &[&AsyncCodeType::Function, &(count as i32), &self.log.file_name, &self.log.version_id],
+            r"INSERT INTO async_code (async_code_type, block_count, file_name, line_number, version_id) VALUES ($1, $2, $3, $4, $5)",
+            &[&AsyncCodeType::Function, &(count as i32), &self.log.file_name, &(node.sig.span().start().line as i32), &self.log.version_id],
         ).unwrap();
 
         trace!(count = count, ty = "Function");
@@ -54,8 +57,9 @@ impl Visit<'_> for Stats<'_, '_> {
         self.count += 1;
 
         self.log.db.execute(
-            r"INSERT INTO async_code (async_code_type, block_count, file_name, version_id) VALUES ($1, $2, $3, $4)",
-            &[&AsyncCodeType::Block, &None::<i32>, &self.log.file_name, &self.log.version_id],
+            r"INSERT INTO async_code (async_code_type, block_count, file_name, line_number, version_id) VALUES ($1, $2, $3, $4, $5)",
+            &[&AsyncCodeType::Block, &None::<i32>, &self.log.file_name, &(node.span().start().line as i32), &self.log.version_id],
+
         ).unwrap();
 
         trace!(ty = "Block");
@@ -76,6 +80,7 @@ pub const RUNNER: super::Runner = super::Runner {
             CREATE TABLE async_code (
                 async_code_type "AsyncCodeType",
                 block_count INT,
+                line_number INT,
                 file_name TEXT,
                 version_id UUID references versions(id)
             );

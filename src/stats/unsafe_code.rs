@@ -1,6 +1,9 @@
 use crate::sql_enum;
 use quote::ToTokens;
-use syn::visit::{self, Visit};
+use syn::{
+    spanned::Spanned,
+    visit::{self, Visit},
+};
 use tracing::trace;
 #[cfg(test)]
 use tracing_test::traced_test;
@@ -54,8 +57,8 @@ impl Visit<'_> for Stats<'_, '_> {
         self.count += 1;
 
         self.log.db.execute(
-            r"INSERT INTO unsafe_code (unsafe_code_type, block_count, file_name, version_id) VALUES ($1, $2, $3, $4)",
-            &[&UnsafeCodeType::Block, &None::<i32>, &self.log.file_name, &self.log.version_id],
+            r"INSERT INTO unsafe_code (unsafe_code_type, block_count, file_name, line_number, version_id) VALUES ($1, $2, $3, $4, $5)",
+            &[&UnsafeCodeType::Block, &None::<i32>, &self.log.file_name, &(node.span().start().line as i32), &self.log.version_id],
         ).unwrap();
 
         trace!(ty = "Block");
@@ -86,8 +89,8 @@ impl Visit<'_> for Stats<'_, '_> {
         let to_type = list.params.get(1);
 
         self.log.db.execute(
-            r"INSERT INTO transmutes (from_type, to_type, file_name, version_id) VALUES ($1, $2, $3, $4)",
-            &[&from_type, &to_type, &self.log.file_name, &self.log.version_id],
+            r"INSERT INTO transmutes (from_type, to_type, file_name, line_number, version_id) VALUES ($1, $2, $3, $4, $5)",
+            &[&from_type, &to_type, &self.log.file_name, &(node.span().start().line as i32), &self.log.version_id],
         ).unwrap();
 
         trace!(transmute = true, from = from_type, to = to_type);
@@ -109,6 +112,7 @@ pub const RUNNER: super::Runner = super::Runner {
                 unsafe_code_type "UnsafeCodeType",
                 block_count INT,
                 file_name TEXT,
+                line_number INT,
                 version_id UUID references versions(id)
             );
             CREATE INDEX usafe_code_version_index ON unsafe_code(version_id);
@@ -116,6 +120,7 @@ pub const RUNNER: super::Runner = super::Runner {
                 from_type TEXT,
                 to_type TEXT,
                 file_name TEXT,
+                line_number INT,
                 version_id UUID references versions(id)
             );
             CREATE INDEX transmutes_version_index ON transmutes(version_id);

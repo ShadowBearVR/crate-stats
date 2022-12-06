@@ -1,4 +1,5 @@
-use postgres::{Client, NoTls, Transaction};
+use postgres::{NoTls, Transaction};
+use std::env::var;
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
@@ -45,11 +46,13 @@ pub struct Runner {
 impl Runner {
     #[allow(unused)]
     pub fn collect_mock(&self, name: &str) {
-        let mut cli = Client::connect(
-            "dbname=crate-stats-test host=localhost user=macdonald",
-            NoTls,
-        )
-        .unwrap();
+        let mut args = postgres::Config::default();
+        args.dbname("crate-stats-test");
+        args.host("localhost");
+        if let Ok(user) = var("USER") {
+            args.user(&user);
+        }
+        let mut cli = args.connect(NoTls).unwrap();
         let mut tx = cli.transaction().unwrap();
         global_init(&mut tx);
         (self.init)(&mut tx);
