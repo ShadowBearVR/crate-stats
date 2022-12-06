@@ -100,7 +100,7 @@ impl Runner {
         true
     }
 
-    pub fn gitcollect_syntax(&self, file: &syn::File, log: Logger) {
+    pub fn collect_syntax(&self, file: &syn::File, log: Logger) {
         (self.collect)(file, log)
     }
 }
