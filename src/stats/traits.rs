@@ -32,7 +32,8 @@ pub struct Row {
     at_count: usize,
     gat_count: Option<usize>,
     trait_name: String,
-    bounds_count: usize,
+    trait_bounds_count: usize,
+    lifetime_bounds_count: usize,
 }
 
 #[derive(Default, Debug)]
@@ -68,25 +69,39 @@ struct PositionalStats<'log, 'db> {
 
 impl Visit<'_> for PositionalStats<'_, '_> {
     fn visit_type_impl_trait(&mut self, node: &syn::TypeImplTrait) {
+        let trait_bounds_count = node
+            .bounds
+            .iter()
+            .filter(|b| matches!(b, syn::TypeParamBound::Trait(_)))
+            .count();
+        let lifetime_bounds_count = node.bounds.len() - trait_bounds_count;
         for bound in &node.bounds {
             // TODO: Deal with Lifetime
             self.stats.collect_type_param_bound(
                 bound,
                 SyntaxType::TypeImpl,
                 Some(self.position),
-                node.bounds.len(),
+                trait_bounds_count,
+                lifetime_bounds_count,
             )
         }
     }
 
     fn visit_type_trait_object(&mut self, node: &syn::TypeTraitObject) {
+        let trait_bounds_count = node
+            .bounds
+            .iter()
+            .filter(|b| matches!(b, syn::TypeParamBound::Trait(_)))
+            .count();
+        let lifetime_bounds_count = node.bounds.len() - trait_bounds_count;
         for bound in &node.bounds {
             // TODO: Deal with Lifetime
             self.stats.collect_type_param_bound(
                 bound,
                 SyntaxType::TypeDyn,
                 Some(self.position),
-                node.bounds.len(),
+                trait_bounds_count,
+                lifetime_bounds_count,
             )
         }
     }
@@ -103,16 +118,17 @@ impl<'log, 'db> Stats<'log, 'db> {
             .db
             .execute(
                 "INSERT INTO traits
-                (syntax, position, at_count, gat_count, generic_count, bounds_count, trait_name, file_name, line_number, version_id)
+                (syntax, position, at_count, gat_count, generic_count, trait_bounds_count, lifetime_bounds_count, trait_name, file_name, line_number, version_id)
                 VALUES
-                ($1,     $2,       $3,       $4,        $5,           $6,            $7,        $8,         $9,          $10       )",
+                ($1,     $2,       $3,       $4,        $5,            $6,                $7,                    $8,         $9,        $10,         $11)",
                 &[
                     &row.syntax,
                     &row.position,
                     &(row.at_count as i32),
                     &(row.gat_count.map(|i| i as i32)),
                     &(row.generic_count as i32),
-                    &(row.bounds_count as i32),
+                    &(row.trait_bounds_count as i32),
+                    &(row.lifetime_bounds_count as i32),
                     &row.trait_name,
                     &self.log.file_name,
                     &(span.start().line as i32),
@@ -149,9 +165,21 @@ impl Visit<'_> for Stats<'_, '_> {
     }
 
     fn visit_predicate_type(&mut self, node: &syn::PredicateType) {
+        let trait_bounds_count = node
+            .bounds
+            .iter()
+            .filter(|b| matches!(b, syn::TypeParamBound::Trait(_)))
+            .count();
+        let lifetime_bounds_count = node.bounds.len() - trait_bounds_count;
         for bound in &node.bounds {
             // TODO: Deal with Lifetime
-            self.collect_type_param_bound(bound, SyntaxType::WhereClause, None, node.bounds.len())
+            self.collect_type_param_bound(
+                bound,
+                SyntaxType::WhereClause,
+                None,
+                trait_bounds_count,
+                lifetime_bounds_count,
+            )
         }
     }
 
@@ -185,6 +213,7 @@ impl Visit<'_> for Stats<'_, '_> {
             None,
             base_at_count,
             Some(gat_count),
+            0,
             0,
         )
     }
@@ -223,7 +252,8 @@ impl Visit<'_> for Stats<'_, '_> {
                 gat_count: Some(gat_count),
                 at_count,
                 trait_name: node.ident.to_string(),
-                bounds_count: 0,
+                trait_bounds_count: 0,
+                lifetime_bounds_count: 0,
             },
             node.ident.span(),
         );
@@ -236,14 +266,23 @@ impl Stats<'_, '_> {
         bound: &syn::TypeParamBound,
         syntax: SyntaxType,
         position: Option<PositionType>,
-        bounds_count: usize,
+        trait_bounds_count: usize,
+        lifetime_bounds_count: usize,
     ) {
         let trait_bound = match bound {
             syn::TypeParamBound::Trait(t) => t,
             syn::TypeParamBound::Lifetime(_) => return,
         };
 
-        self.collect_trait_path(&trait_bound.path, syntax, position, 0, None, bounds_count)
+        self.collect_trait_path(
+            &trait_bound.path,
+            syntax,
+            position,
+            0,
+            None,
+            trait_bounds_count,
+            lifetime_bounds_count,
+        )
     }
 
     fn collect_trait_path(
@@ -253,7 +292,8 @@ impl Stats<'_, '_> {
         position: Option<PositionType>,
         base_at_count: usize,
         gat_count: Option<usize>,
-        bounds_count: usize,
+        trait_bounds_count: usize,
+        lifetime_bounds_count: usize,
     ) {
         let trait_name = match path.segments.last() {
             Some(seg) => seg.ident.to_string(),
@@ -272,7 +312,8 @@ impl Stats<'_, '_> {
                 at_count: counter.at_count + base_at_count,
                 gat_count,
                 trait_name,
-                bounds_count,
+                trait_bounds_count,
+                lifetime_bounds_count,
             },
             path.span(),
         );
@@ -292,7 +333,8 @@ pub const RUNNER: super::Runner = super::Runner {
                 at_count INT,
                 gat_count INT,
                 generic_count INT,
-                bounds_count INT,
+                trait_bounds_count INT,
+                lifetime_bounds_count INT,
                 trait_name TEXT,
                 line_number INT,
                 file_name TEXT,
@@ -310,15 +352,9 @@ pub const RUNNER: super::Runner = super::Runner {
 #[traced_test]
 fn test_impl_for() {
     RUNNER.collect_mock("impl_for");
-    vec![Row {
-        syntax: SyntaxType::ImplFor,
-        position: None,
-        generic_count: 0,
-        at_count: 1,
-        gat_count: None,
-        trait_name: "Iterator".to_string(),
-        bounds_count: 0,
-    }];
+    assert!(logs_contain(
+        r#"row=Row { syntax: ImplFor, position: None, generic_count: 0, at_count: 1, gat_count: Some(0), trait_name: "Iterator", trait_bounds_count: 0, lifetime_bounds_count: 0 }"#,
+    ));
 }
 
 #[test]
@@ -326,7 +362,7 @@ fn test_impl_for() {
 fn test_iterator_arg() {
     RUNNER.collect_mock("iterator_arg");
     assert!(logs_contain(
-        r#"row=Row { syntax: TypeImpl, position: Some(Argument), generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", bounds_count: 1 }"#,
+        r#"row=Row { syntax: TypeImpl, position: Some(Argument), generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", trait_bounds_count: 1, lifetime_bounds_count: 0 }"#,
     ));
 }
 
@@ -335,7 +371,16 @@ fn test_iterator_arg() {
 fn test_iterator_ret() {
     RUNNER.collect_mock("iterator_ret");
     assert!(logs_contain(
-        r#"row=Row { syntax: TypeImpl, position: Some(Return), generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", bounds_count: 1 }"#,
+        r#"row=Row { syntax: TypeImpl, position: Some(Return), generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", trait_bounds_count: 1, lifetime_bounds_count: 0 }"#,
+    ));
+}
+
+#[test]
+#[traced_test]
+fn test_iterator_ret_lifetime_bounds() {
+    RUNNER.collect_mock("iterator_ret");
+    assert!(logs_contain(
+        r#"row=Row { syntax: TypeImpl, position: Some(Return), generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", trait_bounds_count: 1, lifetime_bounds_count: 2 }"#,
     ));
 }
 
@@ -344,7 +389,7 @@ fn test_iterator_ret() {
 fn test_dyn_iterator_arg() {
     RUNNER.collect_mock("dyn_iterator_arg");
     assert!(logs_contain(
-        r#"row=Row { syntax: TypeDyn, position: Some(Argument), generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", bounds_count: 1 }"#,
+        r#"row=Row { syntax: TypeDyn, position: Some(Argument), generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", trait_bounds_count: 1, lifetime_bounds_count: 0 }"#,
     ));
 }
 
@@ -353,10 +398,10 @@ fn test_dyn_iterator_arg() {
 fn test_many_generics() {
     RUNNER.collect_mock("many_generics");
     assert!(logs_contain(
-        r#"row=Row { syntax: TraitDef, position: None, generic_count: 3, at_count: 1, gat_count: Some(0), trait_name: "Mock", bounds_count: 0 }"#,
+        r#"row=Row { syntax: TraitDef, position: None, generic_count: 3, at_count: 1, gat_count: Some(0), trait_name: "Mock", trait_bounds_count: 0, lifetime_bounds_count: 0 }"#,
     ));
     assert!(logs_contain(
-        r#"row=Row { syntax: TypeImpl, position: Some(Argument), generic_count: 3, at_count: 0, gat_count: None, trait_name: "Mock", bounds_count: 1 }"#,
+        r#"row=Row { syntax: TypeImpl, position: Some(Argument), generic_count: 3, at_count: 0, gat_count: None, trait_name: "Mock", trait_bounds_count: 1, lifetime_bounds_count: 0 }"#,
     ));
 }
 
@@ -365,7 +410,7 @@ fn test_many_generics() {
 fn test_define_gat() {
     RUNNER.collect_mock("define_gat");
     assert!(logs_contain(
-        r#"row=Row { syntax: TraitDef, position: None, generic_count: 0, at_count: 1, gat_count: Some(1), trait_name: "LendingIterator", bounds_count: 0 }"#,
+        r#"row=Row { syntax: TraitDef, position: None, generic_count: 0, at_count: 1, gat_count: Some(1), trait_name: "LendingIterator", trait_bounds_count: 0, lifetime_bounds_count: 0 }"#,
     ));
 }
 
@@ -374,6 +419,6 @@ fn test_define_gat() {
 fn test_where_clause() {
     RUNNER.collect_mock("where_clause");
     assert!(logs_contain(
-        r#"row=Row { syntax: WhereClause, position: None, generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", bounds_count: 1 }"#,
+        r#"row=Row { syntax: WhereClause, position: None, generic_count: 0, at_count: 1, gat_count: None, trait_name: "Iterator", trait_bounds_count: 1, lifetime_bounds_count: 0 }"#,
     ));
 }
