@@ -1,5 +1,5 @@
 ### A Pluto.jl notebook ###
-# v0.19.12
+# v0.19.14
 
 using Markdown
 using InteractiveUtils
@@ -45,7 +45,7 @@ using Dates
 conn = LibPQ.Connection("dbname=$(db_name) host=localhost")
 
 # ╔═╡ b1ab8f76-b7d1-4e9f-979a-37be33ff06b6
- df = DataFrame(execute(conn, "SELECT DISTINCT crate_name, date_str FROM versions"))
+ df = DataFrame(execute(conn, "SELECT DISTINCT crate_name, date_str FROM versions ORDER BY date_str ASC"))
 
 # ╔═╡ dce24d9d-507a-43e7-b25d-13e117652a98
 function date2obj(s::String)
@@ -66,30 +66,61 @@ date2rational(s) = date2int(s) // 12
 plot(countmap(date2obj.(df[!, :date_str])))
 
 # ╔═╡ 167a659f-bd5b-4699-aec5-942bbeb852f4
-version_ids = columntable(execute(conn, "SELECT id FROM versions"))[:id]
-
-# ╔═╡ fcc04503-b7e2-4671-b519-8c56f894d6e2
-@with_kw(
-	struct Point
-		version_id::String
-		trait_counts::Dict{String, Int64}
-		num_closures::Int64
-	end
-)
+version_ids = columntable(execute(conn, "SELECT id FROM versions ORDER BY date_str ASC"))[:id]
 
 # ╔═╡ c67f8329-4139-4f4e-999f-a0269786944e
-function collect_stats(version_id)
+function collect_stats_row(version_id)
 	version_info = first(rowtable(execute(conn, "SELECT * FROM versions where id = \$1", [version_id])))
 	trait_counts_df = DataFrame(execute(conn, "SELECT trait_name, COUNT(*) FROM traits WHERE version_id=\$1 GROUP BY trait_name", [version_id]))
+	async_df = DataFrame(execute(conn, "SELECT COUNT(*) FROM async_code WHERE version_id=\$1 AND async_code_type='Function'", [version_id]))
 	crate_name = execute(conn, "")
 	(
-		version=version_info.id,
+		version_id=version_info.id,
 		name=version_info.crate_name,
 		date=date2obj(version_info.date_str),
 		trait_counts=Dict(trait_counts_df[!, :trait_name] .=> trait_counts_df[!, :count]),
-		num_closures=0
+		async_counts=async_df[1, :count],
+		#future_count_zero=future_count_zero.count,
+		#future_count_non_zero=future_count_non_zero.count
 	)
 end
+
+# ╔═╡ be1159fa-e2c7-4201-9751-113564a49e2a
+function collect_stats_columns()
+	future_count_zero = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS future_only_count FROM traits WHERE trait_name='Future' AND (syntax='TypeImpl' OR syntax='TypeDyn') AND position='Return' AND bounds_count=1 GROUP BY version_id"))
+	future_count_non_zero = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS future_bounded_count FROM traits WHERE trait_name='Future' AND (syntax='TypeImpl' OR syntax='TypeDyn') AND position='Return' AND bounds_count>1 GROUP BY version_id"))
+
+	basic_gat_count = DataFrame(execute(conn, "SELECT version_id, SUM(gat_count) AS basic_gat_count FROM traits GROUP BY version_id"))
+	
+	async_fns_with_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS async_fns_with_block_count FROM async_code WHERE async_code_type='Function' AND block_count>0 GROUP BY version_id"))
+	async_fns_without_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS async_fns_without_block_count FROM async_code WHERE async_code_type='Function' AND block_count=0 GROUP BY version_id"))
+	async_blocks_in_fns_count = DataFrame(execute(conn, "SELECT version_id, SUM(block_count) AS async_blocks_in_fns_count FROM async_code WHERE async_code_type='Function' GROUP BY version_id"))
+	async_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS async_block_count FROM async_code WHERE async_code_type='Block' GROUP BY version_id"))
+	async_fn_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS async_fn_count FROM async_code WHERE async_code_type='Function' GROUP BY version_id"))
+	
+	unsafe_fns_with_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS unsafe_fns_with_block_count FROM unsafe_code WHERE unsafe_code_type='Function' AND block_count>0 GROUP BY version_id"))
+	unsafe_fns_without_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS unsafe_fns_without_block_count FROM unsafe_code WHERE unsafe_code_type='Function' AND block_count=0 GROUP BY version_id"))
+	unsafe_blocks_in_fns_count = DataFrame(execute(conn, "SELECT version_id, SUM(block_count) AS unsafe_blocks_in_fns_count FROM unsafe_code WHERE unsafe_code_type='Function' GROUP BY version_id"))
+	unsafe_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS unsafe_block_count FROM unsafe_code WHERE unsafe_code_type='Block' GROUP BY version_id"))
+	unsafe_fn_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS unsafe_fn_count FROM unsafe_code WHERE unsafe_code_type='Function' GROUP BY version_id"))
+	outerjoin(future_count_zero,
+		future_count_non_zero,
+		basic_gat_count,
+		async_fns_with_block_count,
+		async_fns_without_block_count,
+		async_blocks_in_fns_count,
+		async_block_count,
+		async_fn_count,
+		unsafe_fns_with_block_count,
+		unsafe_fns_without_block_count,
+		unsafe_blocks_in_fns_count,
+		unsafe_block_count,
+		unsafe_fn_count,
+		on=:version_id)
+end
+
+# ╔═╡ 135d3249-1797-49fe-b2be-aa271b556b29
+collect_stats_columns()
 
 # ╔═╡ 92861988-d71b-4538-bae5-9f93f1c30cce
 @bind version_ind Slider(1:length(version_ids))
@@ -97,27 +128,89 @@ end
 # ╔═╡ 6b825fa2-a3a6-44b6-833c-b0c4147e9d48
 version_id = version_ids[version_ind]
 
-# ╔═╡ eed4a9b6-fbd9-4239-8e1f-730c8f7a793a
-execute(conn, "SELECT * FROM versions WHERE id=\$1", [version_id])
-
 # ╔═╡ 2c3398e1-1bb0-47db-8ad1-41a991d68e81
-collect_stats(version_id)
+collect_stats_row(version_id)
 
 # ╔═╡ 4211511c-5917-4923-9b83-dcc5c3ea5f20
-stats = DataFrame(collect_stats.(version_ids))
+stats = outerjoin(
+	DataFrame(asyncmap(collect_stats_row,version_ids)),
+	collect_stats_columns(),
+	on=:version_id
+)
 
-# ╔═╡ f90b3dd4-6c6c-4055-a24b-e79c10f7bb12
-getindex("a" => "b" => "c", 2)
+# ╔═╡ 4a47a53e-81d9-45e4-acec-d6ab6b8bf989
+@bind include_zero CheckBox(default=true)
+
+# ╔═╡ 619fbbb0-d965-4a21-a776-5b010c41873e
+@bind outliers Slider(0:10, default=2)
+
+# ╔═╡ 74040794-dba1-478e-a1b0-4e94313be246
+function meanish(xs, exclude=outliers)
+	mean(filter(x -> include_zero || x != 0, sort(coalesce.(xs, 0)))[1:end-exclude])
+end
 
 # ╔═╡ d7d5d25a-7677-4868-9ca8-b899da7f0c37
 function date_means(selects...)
 	grouped = groupby(select(stats, :date, selects...), :date)
-	reductions = (sel=>mean for (_,(_, sel))=selects)
-	combine(grouped, reductions...)
+	reductions = (sel => meanish => sel for (_,(_, sel))=selects)
+	sort(combine(grouped, reductions...), :date)
 end
 
 # ╔═╡ 0e159c3f-5bfa-4a75-9fd0-a0d3f20e7cdc
-@df date_means(:trait_counts => ByRow(counts -> get(counts, "Future", 0)) => :future_trait_uses) plot(:date, :future_trait_uses_mean)
+begin
+	@df date_means(
+		:trait_counts => ByRow(counts -> get(counts, "Future", 0)) => :future_trait_uses,
+		:trait_counts => ByRow(counts -> get(counts, "Iterator", 0)) => :iterator_trait_uses,
+		:async_counts => identity => :async_counts,
+	) plot(:date, [(:future_trait_uses) (:iterator_trait_uses) (:async_counts)], labels=["Future" "Iterator" "Async Function"])
+	vspan!([Date(2019, 11, 7), Date(2022, 11)], alpha = 0.2, label="Async Stabilized")
+end
+
+# ╔═╡ e45f9619-ac61-46c3-b4f9-2ecba3523287
+begin
+	@df date_means(
+		:future_only_count => identity => :future_only_count,
+		:future_bounded_count => identity => :future_bounded_count,
+	) plot(:date, [(:future_only_count) (:future_bounded_count)])
+	vspan!([Date(2019, 11, 7), Date(2022, 11)], alpha = 0.2, label="Async Stabilized")
+end
+
+# ╔═╡ 9235c2a0-d71c-4e2a-a4df-e2e8faaa4599
+begin
+	@df date_means(
+		:async_fns_with_block_count => identity => :async_fns_with_block_count,
+		:async_fns_without_block_count => identity => :async_fns_without_block_count,
+		:async_blocks_in_fns_count => identity => :async_blocks_in_fns_count,
+		:async_block_count => identity => :async_block_count,
+		:async_fn_count => identity => :async_fn_count,
+	) plot(:date, [(:async_fns_with_block_count) (:async_fns_without_block_count) (:async_blocks_in_fns_count) (:async_block_count) (:async_fn_count)])
+	#vspan!([Date(2019, 11, 7), Date(2022, 11)], alpha = 0.2, label="Async Stabilized")
+end
+
+# ╔═╡ 30497cdc-57a3-4e5d-bbcb-cc3c22bbdc14
+begin
+	@df date_means(
+		:unsafe_fns_with_block_count => identity => :unsafe_fns_with_block_count,
+		:unsafe_fns_without_block_count => identity => :unsafe_fns_without_block_count,
+		:unsafe_blocks_in_fns_count => identity => :unsafe_blocks_in_fns_count,
+		:unsafe_block_count => identity => :unsafe_block_count,
+		:unsafe_fn_count => identity => :unsafe_fn_count,
+	) plot(:date, (:unsafe_fns_with_block_count) ./ (:unsafe_fn_count), label="Fraction", title="Unsafe fns containing unsafe blocks")
+	vspan!([Date(2020, 04, 29), Date(2021, 05, 6)], alpha = 0.2, label="RFC #2585 Merged")
+	vspan!([Date(2021, 05, 6), Date(2022, 05, 19)], alpha = 0.2, label="1.52 (stabilized lint)")
+	vspan!([Date(2022, 05, 19), Date(2022, 11)], alpha = 0.2, label="1.61 (improved unused unsafe lint)")
+end
+
+# ╔═╡ 4457260a-3262-428e-9ced-f6812dfd12e3
+begin
+	@df date_means(
+		:basic_gat_count => identity => :basic_gat_count,
+	) plot(:date, (:basic_gat_count), label="GAT Count", title="GAT Usage Over Time")
+
+	vspan!([Date(2021, 8, 3), Date(2022, 09, 13)], alpha = 0.2, label="GATs ('Push For GATs Stabalization' Blog Post - PR #84623)")
+	vspan!([Date(2022, 09, 13), Date(2022, 11, 3)], alpha = 0.2, label="GATs (Stabalized on Nightly - PR #96709)")
+	vspan!([Date(2022, 11, 3), Date(2022, 12, 1)], alpha = 0.2, label="1.65 (Stabalized)")
+end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
 PLUTO_PROJECT_TOML_CONTENTS = """
@@ -145,9 +238,9 @@ Tables = "~1.10.0"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.8.2"
+julia_version = "1.8.3"
 manifest_format = "2.0"
-project_hash = "6bbc684e0fd74a6e2a3571d73f04b029b5925d79"
+project_hash = "5070802c5c79e98c2abf4d0735759edf1e6d4502"
 
 [[deps.AbstractFFTs]]
 deps = ["ChainRulesCore", "LinearAlgebra"]
@@ -299,9 +392,9 @@ version = "1.13.0"
 
 [[deps.DataFrames]]
 deps = ["Compat", "DataAPI", "Future", "InvertedIndices", "IteratorInterfaceExtensions", "LinearAlgebra", "Markdown", "Missings", "PooledArrays", "PrettyTables", "Printf", "REPL", "Random", "Reexport", "SnoopPrecompile", "SortingAlgorithms", "Statistics", "TableTraits", "Tables", "Unicode"]
-git-tree-sha1 = "0f44494fe4271cc966ac4fea524111bef63ba86c"
+git-tree-sha1 = "d4f69885afa5e6149d0cab3818491565cf41446d"
 uuid = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
-version = "1.4.3"
+version = "1.4.4"
 
 [[deps.DataStructures]]
 deps = ["Compat", "InteractiveUtils", "OrderedCollections"]
@@ -984,9 +1077,9 @@ version = "1.3.0"
 
 [[deps.PrettyTables]]
 deps = ["Crayons", "Formatting", "LaTeXStrings", "Markdown", "Reexport", "StringManipulation", "Tables"]
-git-tree-sha1 = "d8ed354439950b34ab04ff8f3dfd49e11bc6c94b"
+git-tree-sha1 = "96f6db03ab535bdb901300f88335257b0018689d"
 uuid = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
-version = "2.2.1"
+version = "2.2.2"
 
 [[deps.Printf]]
 deps = ["Unicode"]
@@ -1513,15 +1606,21 @@ version = "1.4.1+0"
 # ╠═94356184-e349-4523-9256-893b7d9a800e
 # ╠═26caa971-37cf-4d80-b744-d3d2c2529cac
 # ╠═167a659f-bd5b-4699-aec5-942bbeb852f4
-# ╠═fcc04503-b7e2-4671-b519-8c56f894d6e2
 # ╠═c67f8329-4139-4f4e-999f-a0269786944e
+# ╠═be1159fa-e2c7-4201-9751-113564a49e2a
+# ╠═135d3249-1797-49fe-b2be-aa271b556b29
 # ╠═92861988-d71b-4538-bae5-9f93f1c30cce
 # ╠═6b825fa2-a3a6-44b6-833c-b0c4147e9d48
-# ╠═eed4a9b6-fbd9-4239-8e1f-730c8f7a793a
 # ╠═2c3398e1-1bb0-47db-8ad1-41a991d68e81
 # ╠═4211511c-5917-4923-9b83-dcc5c3ea5f20
-# ╠═f90b3dd4-6c6c-4055-a24b-e79c10f7bb12
+# ╠═4a47a53e-81d9-45e4-acec-d6ab6b8bf989
+# ╠═619fbbb0-d965-4a21-a776-5b010c41873e
+# ╠═74040794-dba1-478e-a1b0-4e94313be246
 # ╠═d7d5d25a-7677-4868-9ca8-b899da7f0c37
 # ╠═0e159c3f-5bfa-4a75-9fd0-a0d3f20e7cdc
+# ╠═e45f9619-ac61-46c3-b4f9-2ecba3523287
+# ╠═9235c2a0-d71c-4e2a-a4df-e2e8faaa4599
+# ╠═30497cdc-57a3-4e5d-bbcb-cc3c22bbdc14
+# ╠═4457260a-3262-428e-9ced-f6812dfd12e3
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002
