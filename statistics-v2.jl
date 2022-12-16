@@ -38,6 +38,9 @@ using Parameters
 # ╔═╡ 197a0b68-d924-41c9-b7cc-ef317282c949
 using Dates
 
+# ╔═╡ 21694eb5-94dc-4d29-89b3-18b21f929e7a
+using Printf
+
 # ╔═╡ 0f5d60b4-e7f8-49f7-a5f5-d7c2a3b3935c
 @bind db_name confirm(TextField())
 
@@ -52,18 +55,6 @@ function date2obj(s::String)
 	m,y = split(s, '-')
 	Date(parse(Int, y), parse(Int, m))
 end
-
-# ╔═╡ 549b9e40-8a9d-4c60-b0eb-698bf60e9374
-function date2int(s::String)
-	m,y = split(s, '-')
-	(parse(Int, m) - 1) + parse(Int, y) * 12
-end
-
-# ╔═╡ 94356184-e349-4523-9256-893b7d9a800e
-date2rational(s) = date2int(s) // 12
-
-# ╔═╡ 26caa971-37cf-4d80-b744-d3d2c2529cac
-plot(countmap(date2obj.(df[!, :date_str])))
 
 # ╔═╡ 167a659f-bd5b-4699-aec5-942bbeb852f4
 version_ids = columntable(execute(conn, "SELECT id FROM versions ORDER BY date_str ASC"))[:id]
@@ -87,37 +78,62 @@ end
 
 # ╔═╡ be1159fa-e2c7-4201-9751-113564a49e2a
 function collect_stats_columns()
-	future_count_zero = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS future_only_count FROM traits WHERE trait_name='Future' AND (syntax='TypeImpl' OR syntax='TypeDyn') AND position='Return' AND bounds_count=1 GROUP BY version_id"))
-	future_count_non_zero = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS future_bounded_count FROM traits WHERE trait_name='Future' AND (syntax='TypeImpl' OR syntax='TypeDyn') AND position='Return' AND bounds_count>1 GROUP BY version_id"))
+	future_count_zero = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS future_only_count FROM traits WHERE trait_name='Future' AND (syntax='TypeImpl' OR syntax='TypeDyn') AND position='Return' AND trait_bounds_count=1 AND lifetime_bounds_count=0 GROUP BY version_id"))
+	future_count_non_zero = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS future_bounded_count FROM traits WHERE trait_name='Future' AND (syntax='TypeImpl' OR syntax='TypeDyn') AND position='Return' AND trait_bounds_count>1 GROUP BY version_id"))
+	future_lifetime_count_non_zero = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS future_lifetime_count_non_zero FROM traits WHERE trait_name='Future' AND (syntax='TypeImpl' OR syntax='TypeDyn') AND position='Return' AND lifetime_bounds_count>0 GROUP BY version_id"))
 
 	basic_gat_count = DataFrame(execute(conn, "SELECT version_id, SUM(gat_count) AS basic_gat_count FROM traits GROUP BY version_id"))
+
+	rust_line_count = DataFrame(execute(conn, "SELECT id as version_id, line_count_rust as rust_line_count FROM versions GROUP BY id"))
+
+	transmute_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) as transmute_count FROM transmutes GROUP BY version_id"))
+
+	closures_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) as closure_count FROM closures GROUP BY version_id"))
+	tryish_closures_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) as tryish_closures_count FROM closures WHERE is_try_like GROUP BY version_id"))
 	
 	async_fns_with_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS async_fns_with_block_count FROM async_code WHERE async_code_type='Function' AND block_count>0 GROUP BY version_id"))
 	async_fns_without_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS async_fns_without_block_count FROM async_code WHERE async_code_type='Function' AND block_count=0 GROUP BY version_id"))
 	async_blocks_in_fns_count = DataFrame(execute(conn, "SELECT version_id, SUM(block_count) AS async_blocks_in_fns_count FROM async_code WHERE async_code_type='Function' GROUP BY version_id"))
 	async_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS async_block_count FROM async_code WHERE async_code_type='Block' GROUP BY version_id"))
 	async_fn_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS async_fn_count FROM async_code WHERE async_code_type='Function' GROUP BY version_id"))
+	async_lines = DataFrame(execute(conn, "SELECT version_id, SUM(last_line_number - first_line_number + 1) as async_lines FROM async_code WHERE outermost GROUP BY version_id"))
 	
 	unsafe_fns_with_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS unsafe_fns_with_block_count FROM unsafe_code WHERE unsafe_code_type='Function' AND block_count>0 GROUP BY version_id"))
 	unsafe_fns_without_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS unsafe_fns_without_block_count FROM unsafe_code WHERE unsafe_code_type='Function' AND block_count=0 GROUP BY version_id"))
 	unsafe_blocks_in_fns_count = DataFrame(execute(conn, "SELECT version_id, SUM(block_count) AS unsafe_blocks_in_fns_count FROM unsafe_code WHERE unsafe_code_type='Function' GROUP BY version_id"))
 	unsafe_block_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS unsafe_block_count FROM unsafe_code WHERE unsafe_code_type='Block' GROUP BY version_id"))
 	unsafe_fn_count = DataFrame(execute(conn, "SELECT version_id, COUNT(*) AS unsafe_fn_count FROM unsafe_code WHERE unsafe_code_type='Function' GROUP BY version_id"))
+	unsafe_lines = DataFrame(execute(conn, "SELECT version_id, SUM(last_line_number - first_line_number + 1) as unsafe_lines FROM unsafe_code WHERE outermost GROUP BY version_id"))
+
+	
+
+
+	
 	outerjoin(future_count_zero,
 		future_count_non_zero,
+		future_lifetime_count_non_zero,
 		basic_gat_count,
+		rust_line_count,
+		transmute_count,
+		closures_count,
+		tryish_closures_count,
 		async_fns_with_block_count,
 		async_fns_without_block_count,
 		async_blocks_in_fns_count,
 		async_block_count,
 		async_fn_count,
+		async_lines,
 		unsafe_fns_with_block_count,
 		unsafe_fns_without_block_count,
 		unsafe_blocks_in_fns_count,
 		unsafe_block_count,
 		unsafe_fn_count,
+		unsafe_lines,
 		on=:version_id)
 end
+
+# ╔═╡ 096da4ac-98d6-491c-87da-2373e51253c5
+projects_count = select(DataFrame(execute(conn, "SELECT date_str, COUNT(*) FROM versions GROUP BY date_str")), :date_str => ByRow(date2obj) => :date, :count)
 
 # ╔═╡ 135d3249-1797-49fe-b2be-aa271b556b29
 collect_stats_columns()
@@ -131,6 +147,12 @@ version_id = version_ids[version_ind]
 # ╔═╡ 2c3398e1-1bb0-47db-8ad1-41a991d68e81
 collect_stats_row(version_id)
 
+# ╔═╡ 619fbbb0-d965-4a21-a776-5b010c41873e
+@bind outliers Slider(0:10, default=2)
+
+# ╔═╡ 4a47a53e-81d9-45e4-acec-d6ab6b8bf989
+@bind include_zero CheckBox(default=true)
+
 # ╔═╡ 4211511c-5917-4923-9b83-dcc5c3ea5f20
 stats = outerjoin(
 	DataFrame(asyncmap(collect_stats_row,version_ids)),
@@ -138,11 +160,8 @@ stats = outerjoin(
 	on=:version_id
 )
 
-# ╔═╡ 4a47a53e-81d9-45e4-acec-d6ab6b8bf989
-@bind include_zero CheckBox(default=true)
+# ╔═╡ d74e1ccb-fd05-498a-8160-d10831a63bcf
 
-# ╔═╡ 619fbbb0-d965-4a21-a776-5b010c41873e
-@bind outliers Slider(0:10, default=2)
 
 # ╔═╡ 74040794-dba1-478e-a1b0-4e94313be246
 function meanish(xs, exclude=outliers)
@@ -162,7 +181,12 @@ begin
 		:trait_counts => ByRow(counts -> get(counts, "Future", 0)) => :future_trait_uses,
 		:trait_counts => ByRow(counts -> get(counts, "Iterator", 0)) => :iterator_trait_uses,
 		:async_counts => identity => :async_counts,
-	) plot(:date, [(:future_trait_uses) (:iterator_trait_uses) (:async_counts)], labels=["Future" "Iterator" "Async Function"])
+	) plot(:date,
+		[(:future_trait_uses) (:iterator_trait_uses) (:async_counts)], labels=["Future" "Iterator" "Async Function"],
+		legend=:topleft,
+		title="Future vs. Iterator Trait Usage Over Time",#\n(for Crates with Usages)",
+		ylabel="Average Count per Project",
+	)
 	vspan!([Date(2019, 11, 7), Date(2022, 11)], alpha = 0.2, label="Async Stabilized")
 end
 
@@ -171,8 +195,15 @@ begin
 	@df date_means(
 		:future_only_count => identity => :future_only_count,
 		:future_bounded_count => identity => :future_bounded_count,
-	) plot(:date, [(:future_only_count) (:future_bounded_count)])
-	vspan!([Date(2019, 11, 7), Date(2022, 11)], alpha = 0.2, label="Async Stabilized")
+		:future_lifetime_count_non_zero => identity => :future_lifetime_count_non_zero,
+	) plot(:date,
+		[(:future_only_count) (:future_bounded_count) (:future_lifetime_count_non_zero)],
+		legend=:topleft,
+		labels=["-> impl Future" "-> impl Future + T" "-> impl Future + 'a"],
+		title="Trait/Lifetime Bounds on Returned Futures",
+		yaxis="Average Count per Project",
+	)
+	vspan!([Date(2019, 11, 7), Date(2022, 11)], alpha = 0.2, label="Async+Await Stabilized")
 end
 
 # ╔═╡ 9235c2a0-d71c-4e2a-a4df-e2e8faaa4599
@@ -191,25 +222,211 @@ end
 begin
 	@df date_means(
 		:unsafe_fns_with_block_count => identity => :unsafe_fns_with_block_count,
-		:unsafe_fns_without_block_count => identity => :unsafe_fns_without_block_count,
-		:unsafe_blocks_in_fns_count => identity => :unsafe_blocks_in_fns_count,
-		:unsafe_block_count => identity => :unsafe_block_count,
 		:unsafe_fn_count => identity => :unsafe_fn_count,
-	) plot(:date, (:unsafe_fns_with_block_count) ./ (:unsafe_fn_count), label="Fraction", title="Unsafe fns containing unsafe blocks")
+	) plot(
+		:date,
+		100 .* (:unsafe_fns_with_block_count) ./ (:unsafe_fn_count),
+		label="Unsafe Functions with Unsafe Blocks",
+		title="Unsafe Functions Containing Unsafe Blocks",
+		xlims=(Date(2018),Date(2023)),
+		ylabel="Percentage of Functions",
+	)
 	vspan!([Date(2020, 04, 29), Date(2021, 05, 6)], alpha = 0.2, label="RFC #2585 Merged")
-	vspan!([Date(2021, 05, 6), Date(2022, 05, 19)], alpha = 0.2, label="1.52 (stabilized lint)")
-	vspan!([Date(2022, 05, 19), Date(2022, 11)], alpha = 0.2, label="1.61 (improved unused unsafe lint)")
+	vspan!([Date(2021, 05, 6), Date(2022, 05, 19)], alpha = 0.2, label="1.52 (Stabilized Lint)")
+	vspan!([Date(2022, 05, 19), Date(2022, 11)], alpha = 0.2, label="1.61 (Improved Unused Unsafe Lint)")
 end
 
 # ╔═╡ 4457260a-3262-428e-9ced-f6812dfd12e3
 begin
 	@df date_means(
 		:basic_gat_count => identity => :basic_gat_count,
-	) plot(:date, (:basic_gat_count), label="GAT Count", title="GAT Usage Over Time")
+	) plot(
+		:date,
+		(:basic_gat_count),
+		label="Average GAT Count",
+		title="Generic Associated Type Usage Over Time",
+		xlims=(Date(2020),Date(2023)),
+		ylabel="Average Count per Project",
+	)
 
-	vspan!([Date(2021, 8, 3), Date(2022, 09, 13)], alpha = 0.2, label="GATs ('Push For GATs Stabalization' Blog Post - PR #84623)")
-	vspan!([Date(2022, 09, 13), Date(2022, 11, 3)], alpha = 0.2, label="GATs (Stabalized on Nightly - PR #96709)")
-	vspan!([Date(2022, 11, 3), Date(2022, 12, 1)], alpha = 0.2, label="1.65 (Stabalized)")
+	vspan!([Date(2021, 8, 3), Date(2022, 09, 13)], alpha = 0.2, label="'Push For GATs Stabalization' Blog Post - PR #84623")
+	vspan!([Date(2022, 09, 13), Date(2022, 11, 3)], alpha = 0.2, label="Stabilized on Nightly - PR #96709")
+	vspan!([Date(2022, 11, 3), Date(2022, 12, 1)], alpha = 0.2, label="Stabilized (Version 1.65)")
+end
+
+# ╔═╡ 603e8f7a-3664-4841-9962-8ec937196912
+begin
+	@df date_means(
+		:rust_line_count => identity => :rust_line_count,
+	) plot(
+		:date,
+		(:rust_line_count),
+		label="Average Rust Code",
+		legend=:none,
+		title="Project Size Over Time",
+		ylabel="Average Lines of Rust Code per Project",
+		ylim=(0,5E4),
+		size=(500,500),
+		yformatter=x -> @sprintf("%.0fk", (x / 1000)),
+	)
+end
+
+# ╔═╡ bb56dd8e-8d70-4710-af27-7c298483f948
+begin
+	@df sort(projects_count, :date) plot(
+		:date,
+		(:count),
+		label="Average Rust Code",
+		legend=:none,
+		title="Projects Parsed Over Time",
+		ylabel="Count",
+		ylims=(0,1000),
+		size=(500,500),
+	)
+end
+
+# ╔═╡ 339f7997-5bab-4bb7-a827-b810bdd0c97e
+last_date = maximum(stats.date)
+
+# ╔═╡ c21c588e-e774-4f4b-8a5e-a91f884f80c9
+rel_closure_count = select(
+	stats,
+	[:closure_count, :rust_line_count] => ByRow((a, b) -> 1000 * a / b) => :closures_per_kline,
+	[:tryish_closures_count, :rust_line_count] => ByRow((a, b) -> 1000 * a / b) => :fake_try_per_kline,
+	:date,
+)
+
+# ╔═╡ 67074726-abfc-4e1a-9291-e96f7cef6db9
+latest_rel_closure_count = subset(rel_closure_count, :date => ByRow(==(last_date)))
+
+# ╔═╡ 5b79f4b8-74aa-45e4-84a6-c1537f063468
+sort(combine(groupby(rel_closure_count, :date), :closures_per_kline => mean), :date)
+
+# ╔═╡ c08df8ea-c428-4892-a456-856ee21c617b
+begin
+	@df sort(combine(groupby(rel_closure_count, :date), :closures_per_kline => meanish), :date) plot(
+		:date,
+		(:closures_per_kline_meanish),
+		label="Average Rust Code",
+		legend=:none,
+		title="Closure Use Over Time",
+		ylabel="Average Count per Thousand Lines",
+		ylims=(0, 20),
+		size=(500,500),
+	)
+end
+
+# ╔═╡ cf994b0b-8322-439e-9401-eb5e574d53f2
+histogram(
+	latest_rel_closure_count.closures_per_kline,
+	ylabel="# of Projects",
+	xlabel="Average Count per Thousand Lines",
+	title="Projects by Closure Use",
+	legend=:none,
+	size=(500,500),
+)
+
+# ╔═╡ c7d89adc-04f0-44e7-b149-b18e42052338
+histogram(
+	latest_rel_closure_count.fake_try_per_kline,
+	ylabel="# of Projects",
+	xlabel="Average Fake-Try per Thousand Lines",
+	title="Projects by Fake-Try Use",
+	legend=:none,
+	bins=0.0:0.05:1.0,
+)
+
+# ╔═╡ ee5af260-81e2-49a4-8f31-9a3d98dd9254
+begin
+	@df date_means(
+		[:transmute_count, :rust_line_count] => ByRow((a, b) -> 1000 * a / b) => :transmute_count,
+	) plot(
+		:date,
+		(:transmute_count),
+		label="Average Transmute Count",
+		legend=:none,
+		title="Transmute Usage Over Time",
+		ylabel="Average Count per Thousand Lines",
+		ylims=(0.0, :auto),
+	)
+end
+
+# ╔═╡ 7ac7eb9e-ec6a-43ae-99f2-5455dbaeabe4
+begin
+	@df date_means(
+		[:async_lines, :rust_line_count] => ByRow((a, b) -> a / b) => :async_lines,
+	) plot(
+		:date,
+		(:async_lines),
+		legend=:none,
+		title="Async Usage Over Time\n(in $(include_zero ? "All" : "Async") Projects)",
+		ylabel="Percent of Lines that are Async",
+		ylims=(0.0, 0.1),
+		yformatter=x -> @sprintf("%.0f%%", (x * 100)),
+		xlims=(Date(2019, 11, 7), Date(2022, 11)),
+	)
+end
+
+# ╔═╡ b05ed913-7cc8-4ad6-adf6-816e2bdfc4d5
+begin
+	@df date_means(
+		:unsafe_lines => identity => :unsafe_lines,
+	) plot(
+		:date,
+		(:unsafe_lines),
+		label="Unsafe Rust Code",
+		legend=:none,
+		title="Project Size Over Time",
+		ylabel="Average Lines of Unsafe Rust Code per Project",
+		yformatter=x -> @sprintf("%.2fk", (x / 1000)),
+	)
+end
+
+# ╔═╡ 6089a6b9-334e-49dd-9d08-ca6cb0e2e48c
+begin
+	@df date_means(
+		[:unsafe_lines, :rust_line_count] => ByRow((a, b) -> a / b) => :unsafe_lines,
+	) plot(
+		:date,
+		(:unsafe_lines),
+		legend=:none,
+		title="Unsafe Usage Over Time\n(in $(include_zero ? "All" : "Unsafe") Projects)",
+		ylabel="Percent of Lines that are Unsafe",
+		ylims=(0.0, 0.1),
+		yformatter=x -> @sprintf("%.0f%%", (x * 100)),
+		size=(500,500),
+	)
+end
+
+# ╔═╡ 3cfc55b1-f9b4-40aa-8a31-71cd41bbbc43
+unsafe_percent_latest = select(subset(stats, :date => ByRow(==(last_date))),
+	[:unsafe_lines, :rust_line_count] => ByRow((a, b) -> a / b) => :unsafe_frac,
+)
+
+# ╔═╡ 8457d10b-9add-4df2-bc2f-ba9f769ac3f1
+histogram(
+	unsafe_percent_latest.unsafe_frac .* 100,
+	ylabel="# of Projects",
+	xlabel="Percent",
+	title="Projects by Closure Use",
+	legend=:none,
+	xformatter=x -> @sprintf("%.0f%%", (x * 100)),
+	size=(500,500),
+)
+
+# ╔═╡ 388372e2-1c12-404d-8f78-069dd6bbe439
+begin
+	@df date_means(
+		:unsafe_lines => ByRow(l -> l > 0) => :unsafe_lines,
+	) plot(
+		:date,
+		(:unsafe_lines),
+		legend=:none,
+		title="Unsafe Projects over Time",
+		ylabel="Percent of Projects that are Unsafe",
+		ylims=(0.0, 1.0),
+		yformatter=x -> @sprintf("%.0f%%", (x * 100)),
+	)
 end
 
 # ╔═╡ 00000000-0000-0000-0000-000000000001
@@ -220,6 +437,7 @@ Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 LibPQ = "194296ae-ab2e-5f79-8cd4-7183a0a5a0d1"
 Parameters = "d96e819e-fc66-5662-9728-84c9c7592b0a"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
 Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
@@ -240,7 +458,7 @@ PLUTO_MANIFEST_TOML_CONTENTS = """
 
 julia_version = "1.8.3"
 manifest_format = "2.0"
-project_hash = "5070802c5c79e98c2abf4d0735759edf1e6d4502"
+project_hash = "76ec21b56192f1feba07bccfb90680d0c4c9043d"
 
 [[deps.AbstractFFTs]]
 deps = ["ChainRulesCore", "LinearAlgebra"]
@@ -1598,23 +1816,23 @@ version = "1.4.1+0"
 # ╠═1ce34845-d7e6-471d-a81b-d5c2c9f4e343
 # ╠═62285c0a-7d79-4bda-b7bd-ae397a4d220f
 # ╠═197a0b68-d924-41c9-b7cc-ef317282c949
+# ╠═21694eb5-94dc-4d29-89b3-18b21f929e7a
 # ╠═0f5d60b4-e7f8-49f7-a5f5-d7c2a3b3935c
 # ╠═61c9db59-cd3b-4d16-85a4-557acad229e6
 # ╠═b1ab8f76-b7d1-4e9f-979a-37be33ff06b6
 # ╠═dce24d9d-507a-43e7-b25d-13e117652a98
-# ╠═549b9e40-8a9d-4c60-b0eb-698bf60e9374
-# ╠═94356184-e349-4523-9256-893b7d9a800e
-# ╠═26caa971-37cf-4d80-b744-d3d2c2529cac
 # ╠═167a659f-bd5b-4699-aec5-942bbeb852f4
 # ╠═c67f8329-4139-4f4e-999f-a0269786944e
 # ╠═be1159fa-e2c7-4201-9751-113564a49e2a
+# ╠═096da4ac-98d6-491c-87da-2373e51253c5
 # ╠═135d3249-1797-49fe-b2be-aa271b556b29
 # ╠═92861988-d71b-4538-bae5-9f93f1c30cce
 # ╠═6b825fa2-a3a6-44b6-833c-b0c4147e9d48
 # ╠═2c3398e1-1bb0-47db-8ad1-41a991d68e81
-# ╠═4211511c-5917-4923-9b83-dcc5c3ea5f20
-# ╠═4a47a53e-81d9-45e4-acec-d6ab6b8bf989
 # ╠═619fbbb0-d965-4a21-a776-5b010c41873e
+# ╠═4a47a53e-81d9-45e4-acec-d6ab6b8bf989
+# ╠═4211511c-5917-4923-9b83-dcc5c3ea5f20
+# ╠═d74e1ccb-fd05-498a-8160-d10831a63bcf
 # ╠═74040794-dba1-478e-a1b0-4e94313be246
 # ╠═d7d5d25a-7677-4868-9ca8-b899da7f0c37
 # ╠═0e159c3f-5bfa-4a75-9fd0-a0d3f20e7cdc
@@ -1622,5 +1840,21 @@ version = "1.4.1+0"
 # ╠═9235c2a0-d71c-4e2a-a4df-e2e8faaa4599
 # ╠═30497cdc-57a3-4e5d-bbcb-cc3c22bbdc14
 # ╠═4457260a-3262-428e-9ced-f6812dfd12e3
+# ╠═603e8f7a-3664-4841-9962-8ec937196912
+# ╠═bb56dd8e-8d70-4710-af27-7c298483f948
+# ╠═339f7997-5bab-4bb7-a827-b810bdd0c97e
+# ╠═c21c588e-e774-4f4b-8a5e-a91f884f80c9
+# ╠═67074726-abfc-4e1a-9291-e96f7cef6db9
+# ╠═5b79f4b8-74aa-45e4-84a6-c1537f063468
+# ╠═c08df8ea-c428-4892-a456-856ee21c617b
+# ╠═cf994b0b-8322-439e-9401-eb5e574d53f2
+# ╠═c7d89adc-04f0-44e7-b149-b18e42052338
+# ╠═ee5af260-81e2-49a4-8f31-9a3d98dd9254
+# ╠═7ac7eb9e-ec6a-43ae-99f2-5455dbaeabe4
+# ╠═b05ed913-7cc8-4ad6-adf6-816e2bdfc4d5
+# ╠═6089a6b9-334e-49dd-9d08-ca6cb0e2e48c
+# ╠═3cfc55b1-f9b4-40aa-8a31-71cd41bbbc43
+# ╠═8457d10b-9add-4df2-bc2f-ba9f769ac3f1
+# ╠═388372e2-1c12-404d-8f78-069dd6bbe439
 # ╟─00000000-0000-0000-0000-000000000001
 # ╟─00000000-0000-0000-0000-000000000002

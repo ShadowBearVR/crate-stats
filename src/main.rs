@@ -158,7 +158,7 @@ fn run_version(source_path: &Path, tx: &mut Transaction, crate_name: &str, date_
 
     let mut languages = Languages::new();
     languages.get_statistics(paths, excluded, &config);
-    let rust = &languages[&LanguageType::Rust];
+    let rust = &languages[&LanguageType::Rust]
 
     tx.execute(
         r"INSERT INTO versions (id, crate_name, date_str, line_count_rust) VALUES ($1, $2, $3, $4)",
