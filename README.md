@@ -19,7 +19,7 @@ With Julia installed on the system, the statistics code can be opened in browser
 julia -e "import Pluto; Pluto.run();"
 ```
 
-One the locally hosted Pluto webpage is open, select either /statistics-v1.jl or /statistics-v2.jl to see the statistics generated for our first and second presentation updates as well as the paper.
+One the locally hosted Pluto webpage is open, select either [statistics-v1](/statistics-v1.jl) or [statistics-v2](/statistics-v2.jl) to see the statistics generated for our first and second presentation updates as well as the paper.
 
 A compressed copy of the Postgres database used to generate the above statistics is available via the following Google Drive link:
 
